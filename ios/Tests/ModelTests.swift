@@ -37,6 +37,15 @@ final class ModelTests: XCTestCase {
         let restored = try Workflow.load(JSONEncoder().encode(workflow), name: "Seed")
         XCTAssertEqual(restored.prompt, workflow.prompt)
     }
+    func testGalleryCollectsImagesAndVideosWithoutDuplicates() throws {
+        let json = #"{"new":{"prompt":[2],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}],"videos":[{"filename":"clip.mp4","subfolder":"v","type":"output"}]},"2":{"gifs":[{"filename":"clip.mp4","subfolder":"v","type":"output"}]}}},"old":{"prompt":[1],"outputs":{"1":{"images":[{"filename":"old.png"}]}}}}"#
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        let files = OutputImage.fromHistory(history)
+        XCTAssertEqual(files.map(\.filename), ["a.png", "clip.mp4", "old.png"])
+        XCTAssertTrue(files[1].isVideo)
+        XCTAssertEqual(files[1].subfolder, "v")
+        XCTAssertEqual(files[2].type, "output")
+    }
     func testPinnedOrderAndStructuredValues() throws {
         let json = #"{"1":{"class_type":"CustomNode","inputs":{"text":"hello","enabled":true,"config":{"x":3},"strength":0.5}}}"#
         var workflow = try Workflow.load(Data(json.utf8), name: "Custom")

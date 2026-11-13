@@ -135,5 +135,21 @@ struct OutputImage: Identifiable {
     let type: String
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
     var isVideo: Bool { ["mp4", "mov", "webm", "m4v"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
+    static func fromHistory(_ history: JSONValue) -> [OutputImage] {
+        let entries = history.object.sorted { ($0.value["prompt"].array.first?.double ?? 0) > ($1.value["prompt"].array.first?.double ?? 0) }
+        var result: [OutputImage] = []
+        var seen = Set<String>()
+        for (id, entry) in entries {
+            for (_, output) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {
+                let files = output["images"].array + output["gifs"].array + output["videos"].array
+                for file in files {
+                    guard !file["filename"].text.isEmpty else { continue }
+                    let item = OutputImage(promptID: id, filename: file["filename"].text, subfolder: file["subfolder"].text, type: file["type"].text.nonEmpty ?? "output")
+                    if seen.insert(item.id).inserted { result.append(item) }
+                }
+            }
+        }
+        return result
+    }
 }
 extension String { var nonEmpty: String? { isEmpty ? nil : self } }

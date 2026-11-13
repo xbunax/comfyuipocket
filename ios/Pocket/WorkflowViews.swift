@@ -159,7 +159,7 @@ struct ParameterEditor: View {
             if case .bool(let current) = value {
                 Toggle(field.key, isOn: Binding(get: { current }, set: { value = .bool($0) }))
             } else if let first = descriptor.first, case .array(let choices) = first {
-                Picker(field.key, selection: Binding(get: { value.text }, set: { value = .string($0) })) {
+                Picker(field.key, selection: Binding(get: { value.text }, set: { text in value = choices.first(where: { $0.text == text }) ?? .string(text) })) {
                     if !choices.map(\.text).contains(value.text) { Text(value.text).tag(value.text) }
                     ForEach(choices.map(\.text), id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.menu)

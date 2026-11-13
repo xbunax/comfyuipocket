@@ -83,6 +83,7 @@ jobs:
           go-version-file: native/go.mod
           cache: false
       - uses: actions/cache@v4
+        id: ios-cache
         with:
           path: |
             ~/go/pkg/mod
@@ -131,6 +132,15 @@ jobs:
             build/screenshots
       - name: Build device bridge
         run: bash scripts/build_tunnel.sh iphoneos arm64
+      - name: Save compiled native library
+        if: steps.ios-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            native/cache
+          key: ${{ steps.ios-cache.outputs.cache-primary-key }}
       - name: Determine signing mode
         id: signing
         env:
