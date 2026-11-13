@@ -1,4 +1,4 @@
-ComfyUI Pocket v0.8.0
+ComfyUI Pocket v0.8.1
 
 - Canvas mode now opens the actual ComfyUI editor inside the app. Add and delete
   nodes, move and resize them, edit all server-provided widgets, connect ports,
@@ -12,6 +12,8 @@ ComfyUI Pocket v0.8.0
   Empty canvases can be saved as drafts. Unchanged 64-bit seeds remain intact.
 - Background sync protects the active editor. Embedded pages do not scan unrelated
   desktop workflows. Sync keeps newer local edits made while an upload is in flight.
+- Device builds use the Intel macOS runner pool after the ARM runners remained
+  queued waiting for a hosted machine. No simulator is required for IPA delivery.
 
 Update the server plugin to v0.6.0 for embedded-editor sync isolation and empty
 canvas drafts. Other editor operations use ComfyUI's own frontend.
