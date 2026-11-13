@@ -43,6 +43,13 @@ jobs:
         with:
           go-version-file: native/go.mod
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/go.mod', 'native/*.go', 'scripts/prepare_tailscale.py') }}
+          restore-keys: native-${{ runner.os }}-${{ runner.arch }}-
       - run: python3 scripts/prepare_tailscale.py
       - run: go mod tidy && go test -race ./...
         working-directory: native
@@ -68,6 +75,14 @@ jobs:
         with:
           go-version-file: native/go.mod
           cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            native/cache
+          key: ios-xcode26.3-${{ runner.arch }}-${{ hashFiles('native/go.mod', 'native/*.go', 'scripts/prepare_tailscale.py', 'scripts/build_tunnel.sh', 'scripts/clang-ios.sh') }}
+          restore-keys: ios-xcode26.3-${{ runner.arch }}-
       - name: Prepare project and embedded Tailscale
         run: |
           brew install xcodegen
@@ -81,10 +96,17 @@ jobs:
           swift scripts/make_icon.swift
           xcodegen generate
       - name: Simulator unit and UI tests
+        timeout-minutes: 15
         run: |
           set -o pipefail
           device=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if "iOS-26" in runtime for x in items if x["name"].startswith("iPhone")))')
           xcodebuild test -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -destination "platform=iOS Simulator,id=$device" -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO | tee build-tests.log | xcbeautify
+      - name: Export UI screenshots
+        if: always()
+        run: |
+          if [[ -d build/Tests.xcresult ]]; then
+            xcrun xcresulttool export attachments --path build/Tests.xcresult --output-path build/screenshots || true
+          fi
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,6 +115,7 @@ jobs:
           path: |
             build/Tests.xcresult
             build-tests.log
+            build/screenshots
       - name: Build device bridge
         run: bash scripts/build_tunnel.sh iphoneos arm64
       - name: Determine signing mode
@@ -100,7 +123,12 @@ jobs:
         env:
           CERT: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
           PROFILE: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
         run: |
+          if [[ -n "$CERT$PROFILE" && ( -z "$CERT" || -z "$PROFILE" || -z "$KEYCHAIN" ) ]]; then
+            echo 'Signing configuration is incomplete. Configure certificate, profile and keychain password together.'
+            exit 1
+          fi
           if [[ -n "$CERT" && -n "$PROFILE" && "${{ github.event_name }}" != "pull_request" ]]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
