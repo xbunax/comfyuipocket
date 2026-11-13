@@ -50,7 +50,9 @@ struct PromptBoardField: View {
 struct PromptFlowLayout: Layout {
     var spacing: CGFloat = 8
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = max(1, proposal.width ?? subviews.reduce(0) { $0 + $1.sizeThatFits(.unspecified).width + spacing })
+        let naturalWidth = subviews.reduce(0) { $0 + $1.sizeThatFits(.unspecified).width + spacing }
+        let proposedWidth = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+        let width = max(1, proposedWidth ?? naturalWidth)
         return arrange(subviews, width: width).size
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
