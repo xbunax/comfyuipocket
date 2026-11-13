@@ -167,16 +167,39 @@ struct WorkflowField: Identifiable {
 struct ResolutionPreset: Identifiable, Sendable {
     let width: Int
     let height: Int
+    let name: String?
+    init(width: Int, height: Int, name: String? = nil) {
+        self.width = width; self.height = height; self.name = name
+    }
     var id: String { "\(width)×\(height)" }
+    var title: String { name.map { "\($0) · \(id)" } ?? id }
     static let common = [
         ResolutionPreset(width: 512, height: 512),
         ResolutionPreset(width: 768, height: 768),
         ResolutionPreset(width: 1024, height: 1024),
         ResolutionPreset(width: 832, height: 1216),
         ResolutionPreset(width: 1216, height: 832),
-        ResolutionPreset(width: 1280, height: 720),
-        ResolutionPreset(width: 720, height: 1280)
+        ResolutionPreset(width: 1280, height: 720, name: "720p 横屏"),
+        ResolutionPreset(width: 720, height: 1280, name: "720p 竖屏"),
+        ResolutionPreset(width: 1920, height: 1080, name: "1080p 横屏"),
+        ResolutionPreset(width: 1080, height: 1920, name: "1080p 竖屏"),
+        ResolutionPreset(width: 2560, height: 1440, name: "2K QHD 横屏"),
+        ResolutionPreset(width: 1440, height: 2560, name: "2K QHD 竖屏"),
+        ResolutionPreset(width: 2048, height: 1080, name: "2K DCI 横屏"),
+        ResolutionPreset(width: 1080, height: 2048, name: "2K DCI 竖屏"),
+        ResolutionPreset(width: 3840, height: 2160, name: "4K UHD 横屏"),
+        ResolutionPreset(width: 2160, height: 3840, name: "4K UHD 竖屏"),
+        ResolutionPreset(width: 4096, height: 2160, name: "4K DCI 横屏"),
+        ResolutionPreset(width: 2160, height: 4096, name: "4K DCI 竖屏"),
+        ResolutionPreset(width: 1536, height: 1536),
+        ResolutionPreset(width: 2048, height: 2048)
     ]
+    static let quick = common.filter {
+        ($0.width == $0.height && $0.width <= 1024)
+            || ($0.width, $0.height) == (1920, 1080)
+            || ($0.width, $0.height) == (2560, 1440)
+            || ($0.width, $0.height) == (3840, 2160)
+    }
 }
 
 /// Only pair editable numeric dimensions on the same node. Never replace links.

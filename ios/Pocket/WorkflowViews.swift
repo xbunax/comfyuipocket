@@ -212,6 +212,7 @@ struct WorkflowEditor: View {
     @State private var arranging = false
     @State private var exporting = false
     @State private var document = WorkflowDocument(data: Data())
+    @State private var randomizeBatchSeeds = true
     @State private var batchCount = 1
     @State private var showBatchSettings = false
     @State private var selectedOutput: OutputImage?
@@ -292,7 +293,7 @@ struct WorkflowEditor: View {
                                     .padding(.vertical, 5)
                             }.buttonStyle(.glass).disabled(store.busy)
                             Button {
-                                Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: true) }
+                                Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: randomizeBatchSeeds) }
                             } label: {
                                 Label(store.busy ? "提交中" : (batchCount > 1 ? "运行 ×\(batchCount)" : "运行"), systemImage: "play.fill")
                                     .frame(maxWidth: .infinity).padding(.vertical, 5)
@@ -315,7 +316,7 @@ struct WorkflowEditor: View {
                 }
                 .sheet(isPresented: $showGraph) { GraphView(workflow: workflow) }
                 .sheet(isPresented: $showCanvas) { WorkflowCanvasView(workflow: workflow) }
-                .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount) }
+                .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount, randomizeSeeds: $randomizeBatchSeeds) }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: workflow.name) { result in
                     if case .failure(let error) = result { store.error = error.localizedDescription }
                 }
@@ -327,7 +328,8 @@ struct WorkflowEditor: View {
 
 private struct BatchSettingsView: View {
     @Binding var count: Int
-    @ScaledMetric(relativeTo: .body) private var sheetHeight: CGFloat = 170
+    @Binding var randomizeSeeds: Bool
+    @ScaledMetric(relativeTo: .body) private var sheetHeight: CGFloat = 240
     var body: some View {
         VStack(spacing: 18) {
             HStack {
@@ -339,6 +341,8 @@ private struct BatchSettingsView: View {
             Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
                 .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
             HStack { Text("1"); Spacer(); Text("20") }.font(.caption).foregroundStyle(.secondary)
+            Toggle("后续生成随机种子", isOn: $randomizeSeeds)
+                .font(.subheadline).accessibilityIdentifier("batchRandomizeSeeds")
         }.padding(24)
             .presentationDetents([.height(sheetHeight)])
             .presentationDragIndicator(.visible)

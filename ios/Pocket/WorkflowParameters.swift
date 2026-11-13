@@ -50,22 +50,35 @@ struct WorkflowParameters: View {
     private func nodeView(_ node: WorkflowNodeSection) -> some View {
         let resolution = WorkflowResolution(fields: node.fields)
         let firstDimension = node.fields.first { $0.key == "width" || $0.key == "height" }?.id
-        return DisclosureGroup(isExpanded: Binding(get: { contains(expandedNodes, node.id) }, set: { setExpanded(node.id, expanded: $0) })) {
-            ForEach(node.fields) { field in
-                if index != nil {
-                    if let resolution, field.id == resolution.width.id || field.id == resolution.height.id {
-                        if field.id == firstDimension { resolutionEditor(resolution) }
-                    } else {
-                        fieldEditor(field)
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy) { setExpanded(node.id, expanded: !contains(expandedNodes, node.id)) }
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(node.title).font(.subheadline.weight(.semibold))
+                        Text("节点 #\(node.id) · \(node.fields.count) 项参数").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: contains(expandedNodes, node.id) ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }.foregroundStyle(.primary).padding(.vertical, 6).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityValue(contains(expandedNodes, node.id) ? "已展开" : "已折叠")
+            if contains(expandedNodes, node.id) {
+                ForEach(node.fields) { field in
+                    if index != nil {
+                        if let resolution, field.id == resolution.width.id || field.id == resolution.height.id {
+                            if field.id == firstDimension { resolutionEditor(resolution) }
+                        } else {
+                            fieldEditor(field)
+                        }
                     }
                 }
             }
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(node.title).font(.subheadline.weight(.semibold))
-                Text("节点 #\(node.id) · \(node.fields.count) 项参数").font(.caption).foregroundStyle(.secondary)
-            }.padding(.vertical, 4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
     }
     private func fieldEditor(_ field: WorkflowField, label: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -97,14 +110,31 @@ struct WorkflowParameters: View {
                 dimension(resolution.width, label: "宽")
                 dimension(resolution.height, label: "高")
             }
-            Text("常用分辨率").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Text("常用分辨率").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(ResolutionPreset.common) { preset in
+                        let selected = resolution.width.value.double == Double(preset.width) && resolution.height.value.double == Double(preset.height)
+                        Button { apply(preset, nodeID: resolution.width.nodeID) } label: {
+                            if selected { Label(preset.title, systemImage: "checkmark") }
+                            else { Text(preset.title) }
+                        }.disabled(resolution.values(for: preset, schema: schema) == nil)
+                    }
+                } label: {
+                    Label("全部预设", systemImage: "slider.horizontal.3")
+                }.font(.caption).buttonStyle(.borderless)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(ResolutionPreset.common) { preset in
+                    ForEach(ResolutionPreset.quick) { preset in
                         let selected = resolution.width.value.double == Double(preset.width) && resolution.height.value.double == Double(preset.height)
                         let supported = resolution.values(for: preset, schema: schema) != nil
                         Button { apply(preset, nodeID: resolution.width.nodeID) } label: {
-                            Text(preset.id).font(.caption.monospacedDigit())
+                            VStack(spacing: 4) {
+                                if let name = preset.name { Text(name).font(.caption.weight(.medium)) }
+                                Text(preset.id).font(.caption.monospacedDigit())
+                            }
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .foregroundStyle(selected ? PocketPalette.accent : Color.primary)
                                 .background(selected ? PocketPalette.accent.opacity(0.12) : Color.secondary.opacity(0.06), in: .capsule)

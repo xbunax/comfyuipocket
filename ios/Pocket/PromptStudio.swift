@@ -1,22 +1,38 @@
 import SwiftUI
 
-/// Quick edits stay inline; the separate editor provides room for longer prompts.
+/// Quick edits and word blocks stay inline; Edit mode opens the larger page.
 struct PromptInputEditor: View {
     @Binding var text: String
     let preferenceKey: String
-    var context: String = ""
+    let context: String
+    @AppStorage private var blockEditing: Bool
     @State private var showEditor = false
+    @State private var boardRevision = UUID()
     @FocusState private var inputFocused: Bool
+    init(text: Binding<String>, preferenceKey: String, context: String = "") {
+        _text = text; self.preferenceKey = preferenceKey; self.context = context
+        _blockEditing = AppStorage(wrappedValue: false, "promptBlockEditing.\(preferenceKey)")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("提示词", text: $text, axis: .vertical)
-                .lineLimit(4...12)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .focused($inputFocused)
-                .accessibilityIdentifier("inlinePromptInput")
-                .padding(14)
-                .background(PocketPalette.accent.opacity(0.05), in: .rect(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(PocketPalette.accent.opacity(0.15)))
+            Toggle("提示词分块编辑", isOn: $blockEditing)
+                .font(.subheadline).accessibilityIdentifier("inlinePromptBlockEditing")
+                .onChange(of: blockEditing) { _, _ in inputFocused = false }
+            if blockEditing {
+                PromptBoardField(text: $text, storageKey: preferenceKey)
+                    .id(boardRevision)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField("提示词", text: $text, axis: .vertical)
+                    .lineLimit(4...12)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .focused($inputFocused)
+                    .accessibilityIdentifier("inlinePromptInput")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(PocketPalette.accent.opacity(0.05), in: .rect(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(PocketPalette.accent.opacity(0.15)))
+            }
             HStack {
                 Text("\(text.count) 字符").font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -29,7 +45,7 @@ struct PromptInputEditor: View {
                     .accessibilityIdentifier("promptVisualEditor")
             }
         }
-        .fullScreenCover(isPresented: $showEditor) {
+        .fullScreenCover(isPresented: $showEditor, onDismiss: { boardRevision = UUID() }) {
             PromptStudioView(text: $text, storageKey: preferenceKey, context: context)
         }
     }
