@@ -164,6 +164,15 @@ struct WorkflowField: Identifiable {
     }
 }
 
+enum InputSchema {
+    static func choices(_ descriptor: [JSONValue]) -> [JSONValue] {
+        guard let first = descriptor.first else { return [] }
+        if case .array(let values) = first { return values }
+        if first.text == "COMBO", descriptor.count > 1 { return descriptor[1]["options"].array }
+        return []
+    }
+}
+
 struct OutputImage: Identifiable {
     let promptID: String
     let filename: String

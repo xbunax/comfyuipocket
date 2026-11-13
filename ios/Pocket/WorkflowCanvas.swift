@@ -191,8 +191,10 @@ struct WorkflowCanvasView: View {
         }
     }
     private func nodesPromptID(_ id: String) -> String {
-        // Execution IDs inside subgraphs can be flattened differently by ComfyUI.
-        // Only use an exact match; otherwise display the saved canvas widgets.
-        "\(scope):\(id)"
+        let containers = workflow.canvas?["nodes"].array.filter { $0["type"].text == scope } ?? []
+        // A shared subgraph definition can have several instances with different
+        // parameters. Only infer an execution ID for an unambiguous instance.
+        guard containers.count == 1 else { return "" }
+        return "\(containers[0]["id"].text):\(id)"
     }
 }

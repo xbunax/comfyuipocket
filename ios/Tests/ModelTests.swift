@@ -17,6 +17,13 @@ final class ModelTests: XCTestCase {
         let legacy = try Workflow.load(Data(#"{"1":{"class_type":"X","inputs":{}}}"#.utf8), name: "Legacy")
         XCTAssertNil(legacy.canvas)
     }
+    func testFileOptionsSupportLegacyListsAndModernComboSchemas() throws {
+        let legacy = try JSONDecoder().decode(JSONValue.self, from: Data(#"[["a.png","b.png"],{"image_upload":true}]"#.utf8))
+        let modern = try JSONDecoder().decode(JSONValue.self, from: Data(#"["COMBO",{"options":["a.mp4","b.mp4"],"video_upload":true}]"#.utf8))
+        XCTAssertEqual(InputSchema.choices(legacy.array).map(\.text), ["a.png", "b.png"])
+        XCTAssertEqual(InputSchema.choices(modern.array).map(\.text), ["a.mp4", "b.mp4"])
+        XCTAssertTrue(InputSchema.choices([.string("STRING")]).isEmpty)
+    }
     func testPromptBlocksRespectNestedSyntaxEscapesAndLora() {
         let text = #"portrait, (red dress, silk:1.25), <lora:style:0.8>, [day:night:0.5], escaped\,comma, ((soft light))"#
         let blocks = PromptBlocks.parse(text)

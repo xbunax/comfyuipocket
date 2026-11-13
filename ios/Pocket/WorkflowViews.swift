@@ -345,11 +345,13 @@ struct ParameterEditor: View {
         let key = field.key.lowercased()
         return key == "text" || key.contains("prompt")
     }
+    private var choices: [JSONValue] { InputSchema.choices(descriptor) }
     private var mediaKind: MediaKind? {
         if let detected = MediaFile.kind(for: field) { return detected }
         guard case .string = value, descriptor.count > 1 else { return nil }
         if descriptor[1]["image_upload"] == .bool(true) { return .image }
         if descriptor[1]["video_upload"] == .bool(true) { return .video }
+        if descriptor[1]["audio_upload"] == .bool(true) { return .file }
         return nil
     }
     var body: some View {
@@ -357,8 +359,8 @@ struct ParameterEditor: View {
             if case .bool(let current) = value {
                 Toggle(field.key, isOn: Binding(get: { current }, set: { value = .bool($0) }))
             } else if let mediaKind {
-                MediaFieldEditor(value: $value, kind: mediaKind, choices: descriptor.first?.array.map(\.text) ?? [])
-            } else if let first = descriptor.first, case .array(let choices) = first {
+                MediaFieldEditor(value: $value, kind: mediaKind, choices: choices.map(\.text))
+            } else if !choices.isEmpty {
                 Picker(field.key, selection: Binding(get: { value.text }, set: { text in value = choices.first(where: { $0.text == text }) ?? .string(text) })) {
                     if !choices.map(\.text).contains(value.text) { Text(value.text).tag(value.text) }
                     ForEach(choices.map(\.text), id: \.self) { Text($0).tag($0) }
