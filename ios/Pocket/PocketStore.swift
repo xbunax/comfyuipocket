@@ -21,6 +21,8 @@ final class PocketStore {
     var syncStatus = "等待连接"
     var syncing = false
     var busy = false
+    var prompts: [SavedPrompt] = []
+    var pinnedWorkflows: [String] = []
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var syncLoop: Task<Void, Never>?
@@ -29,12 +31,19 @@ final class PocketStore {
     @ObservationIgnored private var syncRecords: [String: SyncRecord] = [:]
     @ObservationIgnored private var pendingDeletes: Set<String> = []
     @ObservationIgnored private var lastSyncError: String?
+    @ObservationIgnored private var recentPrompts: [String: [String]] = [:]
     private static var libraryURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("workflows.json")
+    }
+    private static var promptsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("prompts.json")
     }
     init() {
         profile = (UserDefaults.standard.data(forKey: "server").flatMap { try? JSONDecoder().decode(ServerProfile.self, from: $0) }) ?? ServerProfile()
         workflows = (try? JSONDecoder().decode([Workflow].self, from: Data(contentsOf: Self.libraryURL))) ?? []
+        prompts = (try? JSONDecoder().decode([SavedPrompt].self, from: Data(contentsOf: Self.promptsURL))) ?? []
+        pinnedWorkflows = UserDefaults.standard.stringArray(forKey: "pinnedWorkflows") ?? []
+        recentPrompts = (UserDefaults.standard.data(forKey: "recentPrompts").flatMap { try? JSONDecoder().decode([String: [String]].self, from: $0) }) ?? [:]
         syncRecords = (UserDefaults.standard.data(forKey: "syncRecords").flatMap { try? JSONDecoder().decode([String: SyncRecord].self, from: $0) }) ?? [:]
         pendingDeletes = Set(UserDefaults.standard.stringArray(forKey: "pendingDeletes") ?? [])
         // Normalize legacy UUIDs and keep phone edits from versions before automatic sync.
@@ -60,6 +69,58 @@ final class PocketStore {
     private func saveSyncState() {
         UserDefaults.standard.set(try? JSONEncoder().encode(syncRecords), forKey: "syncRecords")
         UserDefaults.standard.set(Array(pendingDeletes), forKey: "pendingDeletes")
+    }
+    private func savePrompts() {
+        do {
+            try JSONEncoder().encode(prompts).write(to: Self.promptsURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch { self.error = "提示词保存失败：\(error.localizedDescription)" }
+    }
+    private func savePinned() {
+        UserDefaults.standard.set(pinnedWorkflows, forKey: "pinnedWorkflows")
+    }
+    private func saveRecentPrompts() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(recentPrompts), forKey: "recentPrompts")
+    }
+    func isPinned(_ id: String) -> Bool { pinnedWorkflows.contains(id) }
+    func togglePinned(_ id: String) {
+        if let index = pinnedWorkflows.firstIndex(of: id) { pinnedWorkflows.remove(at: index) }
+        else { pinnedWorkflows.insert(id, at: 0) }
+        savePinned()
+    }
+    private func forgetPinned(_ id: String) {
+        guard pinnedWorkflows.contains(id) else { return }
+        pinnedWorkflows.removeAll { $0 == id }
+        savePinned()
+    }
+    @discardableResult
+    func savePrompt(title: String, text: String, id: String? = nil) -> SavedPrompt? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let titleValue = cleanTitle.isEmpty ? defaultPromptTitle(value) : cleanTitle
+        let now = Date().timeIntervalSince1970
+        let saved: SavedPrompt
+        if let id, let index = prompts.firstIndex(where: { $0.id == id }) {
+            prompts[index].title = titleValue
+            prompts[index].text = value
+            prompts[index].updatedAt = now
+            saved = prompts[index]
+        } else {
+            saved = SavedPrompt(id: UUID().uuidString, title: titleValue, text: value, updatedAt: now)
+            prompts.append(saved)
+        }
+        prompts.sort { $0.updatedAt > $1.updatedAt }
+        savePrompts()
+        return saved
+    }
+    func deletePrompt(_ id: String) {
+        prompts.removeAll { $0.id == id }
+        savePrompts()
+    }
+    private func defaultPromptTitle(_ text: String) -> String {
+        let line = text.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? "未命名提示词"
+        let value = line.trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? "未命名提示词" : String(value.prefix(30))
     }
     func connect() async {
         guard !connecting else { return }
@@ -148,16 +209,36 @@ final class PocketStore {
             queue = q; history = h
         } catch { if client === api { notice = "刷新失败：\(error.localizedDescription)" } }
     }
-    func submit(_ workflow: Workflow) async {
+    func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
         guard let api = client, !busy else { return }
         busy = true; defer { busy = false }
+        let total = max(1, min(count, 20))
+        var queued = 0
         do {
-            let reply = try await api.json("prompt", method: "POST", body: .object([
-                "prompt": .object(workflow.prompt), "client_id": .string(api.clientID)
-            ]))
-            guard !reply["prompt_id"].text.isEmpty else { throw PocketError.message("提交失败：\(reply)") }
-            notice = "已加入队列 · \(workflow.name)"; save(); await refresh()
-        } catch { self.error = error.localizedDescription }
+            for index in 0..<total {
+                var submitted = workflow
+                if randomizeSeeds && index > 0 { submitted.randomizeSeeds() }
+                let reply = try await api.json("prompt", method: "POST", body: .object([
+                    "prompt": .object(submitted.prompt), "client_id": .string(api.clientID)
+                ]))
+                let promptID = reply["prompt_id"].text
+                guard !promptID.isEmpty else { throw PocketError.message("提交失败：\(reply)") }
+                recordPrompt(promptID, workflowID: workflow.id)
+                queued += 1
+            }
+            notice = queued > 1 ? "已加入队列 · \(workflow.name) ×\(queued)" : "已加入队列 · \(workflow.name)"
+            save(); await refresh()
+        } catch {
+            self.error = error.localizedDescription
+            if queued > 0 { notice = "已加入 \(queued) 个任务，后续提交失败。" }
+        }
+    }
+    private func recordPrompt(_ promptID: String, workflowID: String) {
+        var ids = recentPrompts[workflowID] ?? []
+        ids.removeAll { $0 == promptID }
+        ids.insert(promptID, at: 0)
+        recentPrompts[workflowID] = Array(ids.prefix(12))
+        saveRecentPrompts()
     }
     func deletePending(_ id: String) async {
         do { _ = try await client?.json("queue", method: "POST", body: .object(["delete": .array([.string(id)])])); await refresh() }
@@ -185,6 +266,7 @@ final class PocketStore {
         if canonical { pendingDeletes.insert(id) }
         syncRecords.removeValue(forKey: id)
         workflows.removeAll { $0.id == id }
+        forgetPinned(id)
         save(); saveSyncState()
         guard canonical, connected, pluginAvailable else { return }
         pushTask?.cancel()
@@ -239,6 +321,10 @@ final class PocketStore {
                 syncRecords.removeValue(forKey: id)
                 changed = true
             }
+            let validIDs = Set(workflows.map(\.id))
+            let pinnedBefore = pinnedWorkflows.count
+            pinnedWorkflows.removeAll { !validIDs.contains($0) }
+            if pinnedWorkflows.count != pinnedBefore { savePinned() }
             if changed { save() }
             saveSyncState()
             lastSyncError = nil
@@ -299,6 +385,44 @@ final class PocketStore {
             if workflows.contains(where: { $0.id == workflow.id }) { workflow.id = Workflow.newID() }
             workflows.append(workflow); save(); touch(workflow.id)
         } catch { self.error = error.localizedDescription }
+    }
+    func recentPromptIDs(for workflowID: String) -> [String] {
+        recentPrompts[workflowID] ?? []
+    }
+    func isActivePrompt(for workflowID: String) -> Bool {
+        guard !activePrompt.isEmpty else { return false }
+        return (recentPrompts[workflowID] ?? []).contains(activePrompt)
+    }
+    func images(forWorkflow workflowID: String) -> [OutputImage] {
+        var result: [OutputImage] = []
+        var seen = Set<String>()
+        for promptID in recentPrompts[workflowID] ?? [] {
+            for item in OutputImage.fromHistoryEntry(history[promptID], promptID: promptID) where seen.insert(item.id).inserted {
+                result.append(item)
+            }
+        }
+        return result
+    }
+    func queueItem(promptID: String) -> JSONValue? {
+        (queue["queue_running"].array + queue["queue_pending"].array).first { item in
+            item.array.count > 1 && item.array[1].text == promptID
+        }
+    }
+    func isRunning(_ promptID: String) -> Bool {
+        queue["queue_running"].array.contains { $0.array.count > 1 && $0.array[1].text == promptID }
+    }
+    func isPending(_ promptID: String) -> Bool {
+        queue["queue_pending"].array.contains { $0.array.count > 1 && $0.array[1].text == promptID }
+    }
+    var runningPromptID: String? {
+        queue["queue_running"].array.first.flatMap { item in
+            item.array.count > 1 ? item.array[1].text.nonEmpty : nil
+        }
+    }
+    var sortedHistoryIDs: [String] {
+        history.object.sorted { a, b in
+            (a.value["prompt"].array.first?.double ?? 0) > (b.value["prompt"].array.first?.double ?? 0)
+        }.map { $0.key }
     }
     var images: [OutputImage] {
         OutputImage.fromHistory(history)

@@ -49,6 +49,12 @@ final class ComfyClient {
     func image(_ image: OutputImage) async throws -> Data {
         try await checked(request("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)]))
     }
+    func inputMedia(_ value: String) async throws -> Data {
+        let parts = MediaFile.split(value)
+        var query = [URLQueryItem(name: "filename", value: parts.filename), .init(name: "type", value: parts.type)]
+        if !parts.subfolder.isEmpty { query.append(.init(name: "subfolder", value: parts.subfolder)) }
+        return try await checked(request("view", query: query))
+    }
     func download(_ image: OutputImage) async throws -> URL {
         let r = try request("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])
         let (temporary, response) = try await session.download(for: r)

@@ -77,4 +77,44 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(profile.host, "10.0.0.5")
         XCTAssertFalse(profile.https)
     }
+    func testBatchSeedRandomizationPreservesOtherValuesAndTypes() throws {
+        let json = #"{"1":{"class_type":"KSampler","inputs":{"seed":1,"steps":20,"noise_seed":9007199254740993,"text":"seed"}}}"#
+        var workflow = try Workflow.load(Data(json.utf8), name: "Seeds")
+        workflow.randomizeSeeds()
+        if case .integer(let seed) = workflow.prompt["1"]?["inputs"]["seed"] ?? .null {
+            XCTAssertNotEqual(seed, 1)
+        } else { XCTFail("seed should stay integer") }
+        if case .unsigned(let seed) = workflow.prompt["1"]?["inputs"]["noise_seed"] ?? .null {
+            XCTAssertLessThanOrEqual(seed, UInt64(UInt32.max))
+        } else { XCTFail("noise_seed should stay unsigned") }
+        XCTAssertEqual(workflow.prompt["1"]?["inputs"]["steps"], .integer(20))
+        XCTAssertEqual(workflow.prompt["1"]?["inputs"]["text"], .string("seed"))
+    }
+    func testMediaFieldDetectionAndAnnotationParsing() {
+        let image = WorkflowField(nodeID: "1", key: "image", nodeTitle: "Load", classType: "LoadImage",
+                                  value: .string("folder/pic.png"))
+        XCTAssertEqual(MediaFile.kind(for: image), .image)
+        let video = WorkflowField(nodeID: "2", key: "file", nodeTitle: "LoadVideo", classType: "LoadVideo",
+                                  value: .string("clip.mp4"))
+        XCTAssertEqual(MediaFile.kind(for: video), .video)
+        let model = WorkflowField(nodeID: "3", key: "ckpt_name", nodeTitle: "Model", classType: "CheckpointLoader",
+                                  value: .string("model.safetensors"))
+        XCTAssertNil(MediaFile.kind(for: model))
+        let parts = MediaFile.split("MOSS_Image_Setup/pic.png [output]")
+        XCTAssertEqual(parts.filename, "pic.png")
+        XCTAssertEqual(parts.subfolder, "MOSS_Image_Setup")
+        XCTAssertEqual(parts.type, "output")
+    }
+    func testHistoryEntryOutputsAndGroupNames() throws {
+        let json = #"{"outputs":{"9":{"images":[{"filename":"a.png","subfolder":"","type":"output"},{"filename":"a.png","subfolder":"","type":"output"}],"videos":[{"filename":"clip.mp4","type":"output"}]}}}"#
+        let entry = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))
+        let files = OutputImage.fromHistoryEntry(entry, promptID: "p1")
+        XCTAssertEqual(files.map(\.filename), ["a.png", "clip.mp4"])
+        XCTAssertEqual(files[0].id, "p1/output//a.png")
+        XCTAssertEqual(files[1].mimeType, "video/mp4")
+        let workflow = try Workflow.load(Data(#"{"1":{"class_type":"X","inputs":{}}}"#.utf8), name: "MiniMax_H3_T2V")
+        XCTAssertEqual(workflow.groupName, "MiniMax")
+        let other = try Workflow.load(Data(#"{"1":{"class_type":"X","inputs":{}}}"#.utf8), name: "Unsaved Workflow")
+        XCTAssertEqual(other.groupName, "其他")
+    }
 }

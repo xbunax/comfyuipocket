@@ -92,11 +92,6 @@ struct ConnectionView: View {
                     TextField("端口", text: $store.profile.port).keyboardType(.numberPad)
                     Toggle("HTTPS", isOn: $store.profile.https)
                 }.disabled(store.connected || store.connecting)
-                Section("Tailscale 组网") {
-                    Text("外网访问时，先在 iPhone 安装并连接 Tailscale 官方 App，让手机和电脑处于同一 Tailnet，再填写电脑的 Tailscale IP（通常为 100.x.x.x）。")
-                    Text("Pocket 不内置 VPN，也不经过额外的中转服务器；连接路径由系统 Tailscale App 负责。")
-                    Text("同一 Wi-Fi 下也可以直接填写电脑的局域网 IP。")
-                }.font(.footnote)
                 Section {
                     if store.connected {
                         Button("断开服务器", role: .destructive) { store.disconnect() }
@@ -108,7 +103,7 @@ struct ConnectionView: View {
                 }
                 Section("连接提示") {
                     Text("ComfyUI 需监听手机能访问的网卡，例如 --listen 0.0.0.0 --port 8188。")
-                    Text("ComfyUI 原生接口没有访问密码。仅在可信局域网或受 Tailnet ACL 保护的网络使用，不要把端口开放到公网。")
+                    Text("ComfyUI 原生接口没有访问密码。仅在可信局域网内使用，不要把端口开放到公网。")
                     Text("连接后工作流会自动双向同步；直接导入 API JSON 和运行任务不依赖插件。")
                 }.font(.footnote)
             }

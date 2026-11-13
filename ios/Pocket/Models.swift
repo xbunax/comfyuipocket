@@ -111,6 +111,34 @@ struct Workflow: Codable, Identifiable, Equatable {
         var inputs = node["inputs"]!.object
         inputs[field.key] = value; node["inputs"] = .object(inputs); prompt[field.nodeID] = .object(node)
     }
+    mutating func randomizeSeeds() {
+        for nodeID in Array(prompt.keys) {
+            guard var node = prompt[nodeID]?.object, var inputs = node["inputs"]?.object else { continue }
+            var changed = false
+            for (key, value) in inputs where key.lowercased().contains("seed") {
+                switch value {
+                case .integer:
+                    inputs[key] = .integer(Int64.random(in: 0...Int64(UInt32.max)))
+                    changed = true
+                case .unsigned:
+                    inputs[key] = .unsigned(UInt64.random(in: 0...UInt64(UInt32.max)))
+                    changed = true
+                default:
+                    break
+                }
+            }
+            if changed {
+                node["inputs"] = .object(inputs)
+                prompt[nodeID] = .object(node)
+            }
+        }
+    }
+    var groupName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let index = trimmed.firstIndex(where: { $0 == "_" || $0 == "-" }) else { return "其他" }
+        let prefix = String(trimmed[..<index]).trimmingCharacters(in: .whitespaces)
+        return prefix.isEmpty ? "其他" : prefix
+    }
 }
 
 struct WorkflowField: Identifiable {
@@ -135,23 +163,86 @@ struct OutputImage: Identifiable {
     let subfolder: String
     let type: String
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
-    var isVideo: Bool { ["mp4", "mov", "webm", "m4v"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
+    var isVideo: Bool { ["mp4", "mov", "webm", "m4v", "avi", "mkv"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
+    var mimeType: String {
+        switch URL(fileURLWithPath: filename).pathExtension.lowercased() {
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "webp": return "image/webp"
+        case "gif": return "image/gif"
+        case "mp4", "m4v": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "webm": return "video/webm"
+        default: return "application/octet-stream"
+        }
+    }
+    static func fromHistoryEntry(_ entry: JSONValue, promptID: String) -> [OutputImage] {
+        var result: [OutputImage] = []
+        var seen = Set<String>()
+        for (_, output) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {
+            let files = output["images"].array + output["gifs"].array + output["videos"].array
+            for file in files {
+                guard !file["filename"].text.isEmpty else { continue }
+                let item = OutputImage(promptID: promptID, filename: file["filename"].text, subfolder: file["subfolder"].text,
+                                       type: file["type"].text.nonEmpty ?? "output")
+                if seen.insert(item.id).inserted { result.append(item) }
+            }
+        }
+        return result
+    }
     static func fromHistory(_ history: JSONValue) -> [OutputImage] {
         let entries = history.object.sorted { ($0.value["prompt"].array.first?.double ?? 0) > ($1.value["prompt"].array.first?.double ?? 0) }
         var result: [OutputImage] = []
         var seen = Set<String>()
         for (id, entry) in entries {
-            for (_, output) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {
-                let files = output["images"].array + output["gifs"].array + output["videos"].array
-                for file in files {
-                    guard !file["filename"].text.isEmpty else { continue }
-                    let item = OutputImage(promptID: id, filename: file["filename"].text, subfolder: file["subfolder"].text, type: file["type"].text.nonEmpty ?? "output")
-                    if seen.insert(item.id).inserted { result.append(item) }
-                }
+            for item in fromHistoryEntry(entry, promptID: id) where seen.insert(item.id).inserted {
+                result.append(item)
             }
         }
         return result
     }
+}
+
+enum MediaKind: Equatable { case image, video }
+
+enum MediaFile {
+    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "tiff"]
+    static let videoExtensions: Set<String> = ["mp4", "mov", "webm", "m4v", "avi", "mkv"]
+
+    static func kind(for field: WorkflowField) -> MediaKind? {
+        guard case .string(let raw) = field.value else { return nil }
+        let key = field.key.lowercased()
+        let nodeClass = field.classType.lowercased()
+        let ext = URL(fileURLWithPath: raw).pathExtension.lowercased()
+        if nodeClass == "loadvideo" || (key == "file" && videoExtensions.contains(ext)) { return .video }
+        if nodeClass == "loadimage" || (key == "image" && (ext.isEmpty || imageExtensions.contains(ext))) { return .image }
+        if key.contains("image") && imageExtensions.contains(ext) { return .image }
+        if key.contains("video") && videoExtensions.contains(ext) { return .video }
+        return nil
+    }
+
+    static func split(_ raw: String) -> (filename: String, subfolder: String, type: String) {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var type = "input"
+        let annotations = [(" [output]", "output"), (" [input]", "input"), (" [temp]", "temp")]
+        for (suffix, annotation) in annotations where value.hasSuffix(suffix) {
+            value = String(value.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+            type = annotation
+            break
+        }
+        value = value.replacingOccurrences(of: "\\", with: "/")
+        let parts = value.split(separator: "/", omittingEmptySubsequences: true)
+        let filename = parts.last.map(String.init) ?? value
+        let subfolder = parts.dropLast().joined(separator: "/")
+        return (filename, subfolder, type)
+    }
+}
+
+struct SavedPrompt: Codable, Identifiable, Equatable {
+    var id: String
+    var title: String
+    var text: String
+    var updatedAt: Double
 }
 extension String { var nonEmpty: String? { isEmpty ? nil : self } }
 
