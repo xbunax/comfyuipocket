@@ -73,6 +73,11 @@ struct Workflow: Codable, Identifiable, Equatable {
     var name: String
     var prompt: [String: JSONValue]
     var pinned: [String] = []
+    var canvas: JSONValue? = nil
+    enum CodingKeys: String, CodingKey {
+        case id, name, prompt, pinned
+        case canvas = "workflow"
+    }
     static func newID() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
@@ -89,7 +94,8 @@ struct Workflow: Codable, Identifiable, Equatable {
         }
         return Workflow(id: root["id"]?.text.nonEmpty ?? newID(),
                         name: root["name"]?.text.nonEmpty ?? name, prompt: prompt,
-                        pinned: root["pinned"]?.array.map(\.text) ?? [])
+                        pinned: root["pinned"]?.array.map(\.text) ?? [],
+                        canvas: root["workflow"].flatMap { $0 == .null ? nil : $0 })
     }
     var fields: [WorkflowField] {
         prompt.flatMap { nodeID, node in
@@ -204,7 +210,7 @@ struct OutputImage: Identifiable {
     }
 }
 
-enum MediaKind: Equatable { case image, video }
+enum MediaKind: Equatable { case image, video, file }
 
 enum MediaFile {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "tiff"]
@@ -214,11 +220,15 @@ enum MediaFile {
         guard case .string(let raw) = field.value else { return nil }
         let key = field.key.lowercased()
         let nodeClass = field.classType.lowercased()
-        let ext = URL(fileURLWithPath: raw).pathExtension.lowercased()
-        if nodeClass == "loadvideo" || (key == "file" && videoExtensions.contains(ext)) { return .video }
-        if nodeClass == "loadimage" || (key == "image" && (ext.isEmpty || imageExtensions.contains(ext))) { return .image }
+        let ext = URL(fileURLWithPath: split(raw).filename).pathExtension.lowercased()
+        let pathKeys = ["image", "video", "audio", "file", "filename", "file_path", "image_path", "video_path", "path"]
+        if nodeClass.contains("loadvideo") && pathKeys.contains(key) { return .video }
+        if nodeClass.contains("loadimage") && pathKeys.contains(key) { return .image }
+        if pathKeys.contains(key) && videoExtensions.contains(ext) { return .video }
+        if pathKeys.contains(key) && imageExtensions.contains(ext) { return .image }
         if key.contains("image") && imageExtensions.contains(ext) { return .image }
         if key.contains("video") && videoExtensions.contains(ext) { return .video }
+        if pathKeys.contains(key) && (["wav", "mp3", "flac", "ogg", "m4a", "pdf", "txt", "json", "csv", "obj", "glb"].contains(ext) || nodeClass.contains("loadaudio")) { return .file }
         return nil
     }
 

@@ -1,32 +1,34 @@
-ComfyUI Pocket v0.3.0
+ComfyUI Pocket v0.4.0
 
-- Batch generation: queue up to 12 tasks from the workflow page. Subsequent tasks can
-  automatically receive fresh random seeds.
-- Prompt library: save, edit, search and insert reusable prompts from any text prompt
-  field, with one-tap saving of the current prompt.
-- Workbench: pin workflows to the top and collapse name-prefix groups.
-- Task details: open queued, running or recent tasks to see outputs, live preview,
-  the exact prompts and every submitted parameter.
-- Workflow results: generated images and videos appear directly on the workflow page,
-  with a live preview while the task runs.
-- Media inputs: LoadImage / LoadVideo fields now show a real preview and can take a
-  local photo/video or an existing generated work (uploaded to ComfyUI input).
-- The in-app Tailscale reminder was removed. Networking still uses the IP and port
-  you enter, with the official Tailscale app if you need remote access.
+- Each Run action appears as one task, including batch runs. Task details aggregate
+  outputs and completion counts, retain each generation's exact prompt and seed,
+  and can cancel all pending generations in the task. Partial submission errors
+  are shown without hiding already submitted generations. Batch metadata is kept
+  on the server and task snapshots are saved on the phone, separately per server.
+- Workbench rows now have a visible pin button, alongside swipe and long-press
+  actions. Pinned workflows remain at the top across launches.
+- Workflow canvas view restores saved ComfyUI node positions, sizes, groups and
+  connections, with zoom, pan, node details and subgraph navigation. API-only
+  imports show an explanation when no saved canvas exists. Existing phone
+  libraries automatically fetch canvas data on their next sync.
+- Prompt fields offer a visual card editor, plus a per-field switch for inline
+  block editing. Edit, reorder, disable and weight individual blocks. Nested
+  expressions, escaped commas, LoRA tags and schedules remain intact. Opening an
+  editor does not rewrite the original text; Apply commits the visual draft.
+  Saved prompt versions and the existing prompt library remain available.
+- Image/file inputs always show a preview, including fields returned as filename
+  dropdowns by ComfyUI. Server files can be selected from a preview list. Local
+  photos, videos and Files imports show an upload preview; generated works can
+  still be reused. Video thumbnails load automatically through AVFoundation.
+  Other file formats use iOS Quick Look for supported previews.
+- Generated results remain at the bottom of the workflow page.
 
-Automatic all-workflow sync from v0.2.0 is unchanged. The plugin ZIP is unchanged
-from v0.2.0; updating the IPA alone is enough for the new client features.
+The server plugin is unchanged from v0.2.0. Updating the IPA is sufficient.
+Canvas view displays the saved layout; node creation and rewiring stay in ComfyUI.
+Prompt weighting uses (text:1.20); interpretation depends on the workflow encoder.
 
 Assets:
 
-- `ComfyUIPocket-unsigned.ipa`: requires your own signing before installation.
-- `ComfyUIPocket-signed.ipa` (when signing secrets are configured): installable
-  devices are limited by the embedded provisioning profile.
-- `comfyui_pocket-plugin.zip`: extract to `ComfyUI/custom_nodes/`, restart ComfyUI,
-  then open ComfyUI in a browser once so automatic export can run.
-- `SHA256SUMS.txt`: checksums of release assets.
-
-The first release of this version is a development preview. Simulator tests do not
-establish physical-device behavior, Tailscale routing, or background behavior.
-Tailscale connections are managed by the official app; depending on the network it
-may use DERP relaying. The Pocket app itself contacts only the IP and port you enter.
+- ComfyUIPocket-unsigned.ipa: sign before installation.
+- comfyui_pocket-plugin.zip: existing installations do not need an update.
+- SHA256SUMS.txt: release asset checksums.

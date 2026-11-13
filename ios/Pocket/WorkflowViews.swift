@@ -3,6 +3,8 @@ import UniformTypeIdentifiers
 import PhotosUI
 import AVFoundation
 import CoreMedia
+import QuickLook
+import QuickLookThumbnailing
 
 private struct WorkflowGroup: Identifiable {
     let id: String
@@ -135,8 +137,16 @@ struct LibraryView: View {
     }
 
     @ViewBuilder private func row(for workflow: Workflow) -> some View {
-        NavigationLink(value: workflow.id) {
-            WorkflowRow(workflow: workflow, pinned: store.isPinned(workflow.id))
+        HStack {
+            NavigationLink(value: workflow.id) {
+                WorkflowRow(workflow: workflow, pinned: store.isPinned(workflow.id))
+            }.accessibilityIdentifier("workflow.\(workflow.id)")
+            Button { store.togglePinned(workflow.id) } label: {
+                Image(systemName: store.isPinned(workflow.id) ? "pin.fill" : "pin")
+                    .foregroundStyle(store.isPinned(workflow.id) ? Color.orange : Color.secondary)
+            }.buttonStyle(.borderless)
+                .accessibilityIdentifier("pin.\(workflow.id)")
+                .accessibilityLabel(store.isPinned(workflow.id) ? "取消置顶 \(workflow.name)" : "置顶 \(workflow.name)")
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button {
@@ -149,6 +159,10 @@ struct LibraryView: View {
         .swipeActions(edge: .trailing) {
             Button("删除", role: .destructive) { store.delete(workflow.id) }
             Button("复制") { store.duplicate(workflow) }.tint(.blue)
+        }
+        .contextMenu {
+            Button(store.isPinned(workflow.id) ? "取消置顶" : "置顶", systemImage: "pin") { store.togglePinned(workflow.id) }
+            Button("复制", systemImage: "doc.on.doc") { store.duplicate(workflow) }
         }
     }
 }
@@ -176,6 +190,7 @@ struct WorkflowEditor: View {
     @Environment(PocketStore.self) private var store
     let id: String
     @State private var showGraph = false
+    @State private var showCanvas = false
     @State private var arranging = false
     @State private var exporting = false
     @State private var document = WorkflowDocument(data: Data())
@@ -192,6 +207,14 @@ struct WorkflowEditor: View {
                     Section {
                         TextField("工作流名称", text: Binding(get: { store.workflows[index].name }, set: { store.workflows[index].name = $0; store.save(); store.touch(id) }))
                             .font(.title3.bold())
+                        HStack {
+                            Button("画布视图", systemImage: "square.3.layers.3d") { showCanvas = true }
+                                .accessibilityIdentifier("workflowCanvasButton")
+                            Spacer()
+                            Button(store.isPinned(id) ? "取消置顶" : "置顶工作流", systemImage: store.isPinned(id) ? "pin.fill" : "pin") {
+                                store.togglePinned(id)
+                            }
+                        }.font(.caption).buttonStyle(.borderless)
                         Text("提示词和常用参数优先展示。点击图钉收藏；在“排列”中拖动调整顺序。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -207,7 +230,7 @@ struct WorkflowEditor: View {
                     } else {
                         ForEach(workflow.fields) { field in
                             Section {
-                                ParameterEditor(field: field, schema: store.nodeInfo[field.classType], value: Binding(
+                                ParameterEditor(field: field, schema: store.nodeInfo[field.classType], preferenceKey: id, value: Binding(
                                     get: { store.workflows[index].prompt[field.nodeID]?["inputs"][field.key] ?? field.value },
                                     set: { store.workflows[index].set(field, value: $0); store.save(); store.touch(id) }
                                 ))
@@ -267,9 +290,9 @@ struct WorkflowEditor: View {
                         }
                         Spacer()
                         Menu {
-                            Picker("任务数量", selection: $batchCount) {
+                            Picker("批次内生成数量", selection: $batchCount) {
                                 ForEach([1, 2, 3, 4, 6, 8, 12], id: \.self) { count in
-                                    Text("\(count) 个任务").tag(count)
+                                    Text("\(count) 次生成 · 合并为一个任务").tag(count)
                                 }
                             }
                             Toggle("后续任务随机种子", isOn: $randomizeBatchSeeds)
@@ -289,6 +312,7 @@ struct WorkflowEditor: View {
                         Menu {
                             Button(arranging ? "完成排列" : "排列参数", systemImage: "arrow.up.arrow.down") { arranging.toggle() }
                             Button("节点依赖", systemImage: "point.3.connected.trianglepath.dotted") { showGraph = true }
+                            Button("画布视图", systemImage: "square.3.layers.3d") { showCanvas = true }
                             Button("导出工作流", systemImage: "square.and.arrow.up") {
                                 do { document = WorkflowDocument(data: try JSONEncoder().encode(workflow)); exporting = true }
                                 catch { store.error = error.localizedDescription }
@@ -297,6 +321,7 @@ struct WorkflowEditor: View {
                     }
                 }
                 .sheet(isPresented: $showGraph) { GraphView(workflow: workflow) }
+                .sheet(isPresented: $showCanvas) { WorkflowCanvasView(workflow: workflow) }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: workflow.name) { result in
                     if case .failure(let error) = result { store.error = error.localizedDescription }
                 }
@@ -310,9 +335,9 @@ struct ParameterEditor: View {
     @Environment(PocketStore.self) private var store
     let field: WorkflowField
     let schema: JSONValue
+    var preferenceKey: String = "default"
     @Binding var value: JSONValue
     @State private var numericDraft = ""
-    @State private var showPrompts = false
     private var descriptor: [JSONValue] {
         (schema["input"]["required"].object[field.key] ?? schema["input"]["optional"].object[field.key] ?? .null).array
     }
@@ -320,24 +345,32 @@ struct ParameterEditor: View {
         let key = field.key.lowercased()
         return key == "text" || key.contains("prompt")
     }
-    private var mediaKind: MediaKind? { MediaFile.kind(for: field) }
+    private var mediaKind: MediaKind? {
+        if let detected = MediaFile.kind(for: field) { return detected }
+        guard case .string = value, descriptor.count > 1 else { return nil }
+        if descriptor[1]["image_upload"] == .bool(true) { return .image }
+        if descriptor[1]["video_upload"] == .bool(true) { return .video }
+        return nil
+    }
     var body: some View {
         Group {
             if case .bool(let current) = value {
                 Toggle(field.key, isOn: Binding(get: { current }, set: { value = .bool($0) }))
+            } else if let mediaKind {
+                MediaFieldEditor(value: $value, kind: mediaKind, choices: descriptor.first?.array.map(\.text) ?? [])
             } else if let first = descriptor.first, case .array(let choices) = first {
                 Picker(field.key, selection: Binding(get: { value.text }, set: { text in value = choices.first(where: { $0.text == text }) ?? .string(text) })) {
                     if !choices.map(\.text).contains(value.text) { Text(value.text).tag(value.text) }
                     ForEach(choices.map(\.text), id: \.self) { Text($0).tag($0) }
                 }.pickerStyle(.menu)
             } else if case .string = value {
-                if let mediaKind {
-                    MediaFieldEditor(value: $value, kind: mediaKind)
+                if isPromptField {
+                    PromptInputEditor(text: Binding(get: { value.text }, set: { value = .string($0) }),
+                                      preferenceKey: preferenceKey + "." + field.id)
                 } else {
                     TextField(field.key, text: Binding(get: { value.text }, set: { value = .string($0) }), axis: .vertical)
                         .lineLimit(field.priority == 0 ? 4...12 : 1...5)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if isPromptField { promptButtons }
                 }
             } else {
                 HStack {
@@ -368,173 +401,6 @@ struct ParameterEditor: View {
             }
         }
     }
-    private var promptButtons: some View {
-        HStack(spacing: 16) {
-            Button { showPrompts = true } label: { Label("提示词库", systemImage: "text.book.closed") }
-            Button { savePrompt() } label: { Label("保存提示词", systemImage: "square.and.arrow.down") }
-        }
-        .font(.caption)
-        .sheet(isPresented: $showPrompts) {
-            PromptLibraryView(insert: { value = .string($0) })
-        }
-    }
-    private func savePrompt() {
-        let text = value.text
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            store.notice = "提示词为空。"
-            return
-        }
-        _ = store.savePrompt(title: "", text: text)
-        store.notice = "已保存到提示词库。"
-    }
-}
-
-struct MediaFieldEditor: View {
-    @Environment(PocketStore.self) private var store
-    @Binding var value: JSONValue
-    let kind: MediaKind
-    @State private var photo: PhotosPickerItem?
-    @State private var uploading = false
-    @State private var showWorks = false
-    private var text: String { value.text }
-    private var filename: String { MediaFile.split(text).filename }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            InputMediaPreview(value: text, kind: kind)
-            if !filename.isEmpty {
-                Text(filename).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-            HStack(spacing: 12) {
-                PhotosPicker(selection: $photo, matching: kind == .video ? PHPickerFilter.videos : PHPickerFilter.images) {
-                    Label(uploading ? "上传中…" : (kind == .video ? "本地视频" : "本地照片"),
-                          systemImage: kind == .video ? "film" : "photo.badge.plus")
-                }.disabled(!store.connected || uploading)
-                Button { showWorks = true } label: {
-                    Label("从作品选择", systemImage: "photo.on.rectangle.angled")
-                }.buttonStyle(.glass)
-                    .disabled(!store.connected || uploading)
-            }.font(.caption)
-            if uploading { ProgressView().controlSize(.mini) }
-        }
-        .onChange(of: photo) { _, item in
-            guard let item else { return }
-            Task { await importPhoto(item) }
-        }
-        .sheet(isPresented: $showWorks) {
-            WorkPicker(kind: kind) { output in
-                Task { await useWork(output) }
-            }
-        }
-    }
-    private func importPhoto(_ item: PhotosPickerItem) async {
-        uploading = true; defer { uploading = false; photo = nil }
-        do {
-            guard let api = store.client else { throw PocketError.message("请先连接服务器。") }
-            guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw PocketError.message("无法读取所选文件。")
-            }
-            let filename: String
-            let mime: String
-            var payload = data
-            if kind == .video {
-                let type = item.supportedContentTypes.first
-                filename = "pocket-\(UUID().uuidString).\(type?.preferredFilenameExtension ?? "mov")"
-                mime = type?.preferredMIMEType ?? "video/quicktime"
-            } else {
-                guard let image = UIImage(data: data), let png = image.pngData() else {
-                    throw PocketError.message("无法读取图片。")
-                }
-                payload = png
-                filename = "pocket-\(UUID().uuidString).png"
-                mime = "image/png"
-            }
-            let name = try await api.upload(payload, filename: filename, mime: mime)
-            value = .string(name)
-        } catch { store.error = error.localizedDescription }
-    }
-    private func useWork(_ output: OutputImage) async {
-        uploading = true; defer { uploading = false }
-        do {
-            guard let api = store.client else { throw PocketError.message("请先连接服务器。") }
-            let data = try await api.image(output)
-            let name = try await api.upload(data, filename: output.filename, mime: output.mimeType)
-            value = .string(name)
-        } catch { store.error = error.localizedDescription }
-    }
-}
-
-struct InputMediaPreview: View {
-    @Environment(PocketStore.self) private var store
-    let value: String
-    let kind: MediaKind
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var loading = false
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16).fill(Color.secondary.opacity(0.08))
-            if value.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: kind == .video ? "film" : "photo").font(.title2)
-                    Text(kind == .video ? "尚未选择视频" : "尚未选择图片").font(.caption)
-                }.foregroundStyle(.secondary)
-            } else if let image {
-                Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
-            } else if kind == .video {
-                VStack(spacing: 6) {
-                    if loading { ProgressView() }
-                    else { Image(systemName: "play.rectangle.fill").font(.largeTitle).foregroundStyle(.mint) }
-                    Text(loading ? "正在加载预览…" : (failed ? "视频预览不可用" : "点按加载视频预览"))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            } else if failed {
-                VStack(spacing: 6) {
-                    Image(systemName: "photo.badge.exclamationmark").font(.title2)
-                    Text("预览不可用").font(.caption)
-                }.foregroundStyle(.secondary)
-            } else {
-                ProgressView()
-            }
-        }
-        .frame(height: 170)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard kind == .video, !value.isEmpty, image == nil, !loading else { return }
-            Task { await load() }
-        }
-        .task(id: value) {
-            if kind == .image { await load() }
-        }
-    }
-    private func load() async {
-        image = nil; failed = false; loading = true
-        defer { loading = false }
-        guard !value.isEmpty, let api = store.client else { return }
-        do {
-            let data = try await api.inputMedia(value)
-            if kind == .video {
-                image = await videoThumbnail(data)
-                if image == nil { failed = true }
-            } else if let decoded = UIImage(data: data) {
-                image = decoded
-            } else {
-                failed = true
-            }
-        } catch { failed = true }
-    }
-    private func videoThumbnail(_ data: Data) async -> UIImage? {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pocket-input-\(UUID().uuidString).mp4")
-        defer { try? FileManager.default.removeItem(at: url) }
-        do { try data.write(to: url) } catch { return nil }
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-        generator.appliesPreferredTrackTransform = true
-        return await withCheckedContinuation { continuation in
-            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: .zero)]) { _, cgImage, _, _, _ in
-                if let cgImage { continuation.resume(returning: UIImage(cgImage: cgImage)) }
-                else { continuation.resume(returning: nil) }
-            }
-        }
-    }
 }
 
 struct WorkPicker: View {
@@ -543,7 +409,7 @@ struct WorkPicker: View {
     let kind: MediaKind
     let onSelect: (OutputImage) -> Void
     private var filtered: [OutputImage] {
-        store.images.filter { kind == .video ? $0.isVideo : !$0.isVideo }
+        store.images.filter { kind == .file || (kind == .video ? $0.isVideo : !$0.isVideo) }
     }
     var body: some View {
         NavigationStack {

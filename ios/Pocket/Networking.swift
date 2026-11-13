@@ -50,10 +50,15 @@ final class ComfyClient {
         try await checked(request("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)]))
     }
     func inputMedia(_ value: String) async throws -> Data {
+        let (data, response) = try await session.data(from: inputMediaURL(value))
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw PocketError.message("文件预览不可用。") }
+        return data
+    }
+    func inputMediaURL(_ value: String) -> URL {
         let parts = MediaFile.split(value)
         var query = [URLQueryItem(name: "filename", value: parts.filename), .init(name: "type", value: parts.type)]
         if !parts.subfolder.isEmpty { query.append(.init(name: "subfolder", value: parts.subfolder)) }
-        return try await checked(request("view", query: query))
+        return url("view", query: query)
     }
     func download(_ image: OutputImage) async throws -> URL {
         let r = try request("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])

@@ -6,6 +6,67 @@ import XCTest
 #endif
 
 final class ModelTests: XCTestCase {
+    func testCanvasSurvivesImportEditingAndExport() throws {
+        let json = #"{"id":"canvas","name":"Layout","prompt":{"1":{"class_type":"Text","inputs":{"text":"hello"}}},"workflow":{"nodes":[{"id":1,"pos":[-200,300],"size":[320,140]}],"links":[],"definitions":{"subgraphs":[]}}}"#
+        var workflow = try Workflow.load(Data(json.utf8), name: "Canvas")
+        let canvas = try XCTUnwrap(workflow.canvas)
+        workflow.set(try XCTUnwrap(workflow.fields.first), value: .string("updated"))
+        let restored = try Workflow.load(JSONEncoder().encode(workflow), name: "Restored")
+        XCTAssertEqual(restored.canvas, canvas)
+        XCTAssertEqual(restored.prompt["1"]?["inputs"]["text"], .string("updated"))
+        let legacy = try Workflow.load(Data(#"{"1":{"class_type":"X","inputs":{}}}"#.utf8), name: "Legacy")
+        XCTAssertNil(legacy.canvas)
+    }
+    func testPromptBlocksRespectNestedSyntaxEscapesAndLora() {
+        let text = #"portrait, (red dress, silk:1.25), <lora:style:0.8>, [day:night:0.5], escaped\,comma, ((soft light))"#
+        let blocks = PromptBlocks.parse(text)
+        XCTAssertEqual(blocks.count, 6)
+        XCTAssertEqual(blocks[1].text, "red dress, silk")
+        XCTAssertEqual(blocks[1].weight, 1.25)
+        XCTAssertEqual(blocks[2].text, "<lora:style:0.8>")
+        XCTAssertEqual(blocks[3].text, "[day:night:0.5]")
+        XCTAssertEqual(blocks[4].text, #"escaped\,comma"#)
+        XCTAssertEqual(PromptBlocks.render(blocks), text)
+    }
+    func testPromptBlockWeightEnableOrderingAndUnicode() {
+        var blocks = PromptBlocks.parse("人物，夜景\n柔光")
+        XCTAssertEqual(blocks.count, 3)
+        blocks[0].weight = 1.35
+        blocks[1].enabled = false
+        blocks.swapAt(0, 2)
+        XCTAssertEqual(PromptBlocks.render(blocks), "柔光, (人物:1.35)")
+        blocks[1].enabled = true
+        XCTAssertEqual(PromptBlocks.parse(PromptBlocks.render(blocks))[2].weight, 1.35)
+    }
+    func testWeightParserDoesNotUnwrapMultipleExpressionsOrEscapedParens() {
+        let blocks = PromptBlocks.parse(#"(cat) (dog:1.2), \(literal\), (outer (inner:1.1):1.40), (test:NaN)"#)
+        XCTAssertEqual(blocks[0].text, "(cat) (dog:1.2)")
+        XCTAssertEqual(blocks[0].weight, 1)
+        XCTAssertEqual(blocks[2].weight, 1.4)
+        XCTAssertEqual(blocks[2].rendered, "(outer (inner:1.1):1.40)")
+        XCTAssertEqual(blocks[3].text, "(test:NaN)")
+    }
+    func testBatchSummaryCountsMixedStatesWithoutTreatingMissingAsSuccess() throws {
+        let task = GenerationTask(id: "batch", server: "s", workflowID: "w", name: "Test", createdAt: 1, requestedCount: 6,
+            items: ["running", "pending", "ok", "bad", "cancelled", "missing"].map { GenerationItem(id: $0, prompt: [:], cancelled: $0 == "cancelled") })
+        let queue = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"queue_running":[[1,"running"]],"queue_pending":[[2,"pending"]]}"#.utf8))
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"ok":{"status":{"status_str":"success"}},"bad":{"status":{"status_str":"error"}}}"#.utf8))
+        let summary = task.summary(queue: queue, history: history)
+        XCTAssertEqual(summary.running, 1); XCTAssertEqual(summary.pending, 1)
+        XCTAssertEqual(summary.completed, 1); XCTAssertEqual(summary.failed, 1)
+        XCTAssertEqual(summary.cancelled, 1); XCTAssertEqual(summary.unavailable, 1)
+        XCTAssertEqual(summary.finished, 3); XCTAssertTrue(summary.active)
+        XCTAssertEqual(try JSONDecoder().decode(GenerationTask.self, from: JSONEncoder().encode(task)), task)
+    }
+    func testMediaDetectionHandlesAnnotatedFilesWithoutMisclassifyingOtherFields() {
+        func field(_ key: String, _ type: String, _ value: String) -> WorkflowField {
+            WorkflowField(nodeID: "1", key: key, nodeTitle: "Load", classType: type, value: .string(value))
+        }
+        XCTAssertEqual(MediaFile.kind(for: field("file", "CustomInput", "pic.png [output]")), .image)
+        XCTAssertEqual(MediaFile.kind(for: field("audio", "LoadAudio", "speech.wav")), .file)
+        XCTAssertNil(MediaFile.kind(for: field("upload", "LoadImage", "image")))
+        XCTAssertNil(MediaFile.kind(for: field("ckpt_name", "CheckpointLoader", "model.safetensors")))
+    }
     func testIPv4AndIPv6Pairing() throws {
         var profile = ServerProfile(); profile.host = "192.168.1.20"
         XCTAssertEqual(try profile.baseURL().absoluteString, "http://192.168.1.20:8188")
