@@ -67,6 +67,8 @@ jobs:
   ios:
     runs-on: macos-15
     timeout-minutes: 60
+    env:
+      NSUnbufferedIO: YES
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26
@@ -100,7 +102,9 @@ jobs:
         run: |
           set -o pipefail
           device=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if "iOS-26" in runtime for x in items if x["name"].startswith("iPhone")))')
-          xcodebuild test -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -destination "platform=iOS Simulator,id=$device" -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO | tee build-tests.log | xcbeautify
+          xcrun simctl boot "$device" || true
+          xcrun simctl bootstatus "$device" -b
+          xcodebuild test -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -destination "platform=iOS Simulator,id=$device,arch=$(uname -m)" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -resultBundlePath build/Tests.xcresult CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES | tee build-tests.log | xcbeautify --is-ci
       - name: Export UI screenshots
         if: always()
         run: |
