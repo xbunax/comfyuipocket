@@ -17,8 +17,9 @@ struct MediaArchive: Codable, Equatable {
         let incomingIDs = Set(incoming.map(\.id))
         outputs = incoming + outputs.filter { !incomingIDs.contains($0.id) && !removedOutputIDs.contains($0.id) }
         let order = Dictionary(uniqueKeysWithValues: outputs.enumerated().map { ($0.element.id, $0.offset) })
+        let generations = generationOrder
         outputs.sort {
-            let a = generationOrder[$0.promptID] ?? 0, b = generationOrder[$1.promptID] ?? 0
+            let a = generations[$0.promptID] ?? 0, b = generations[$1.promptID] ?? 0
             return a == b ? (order[$0.id] ?? 0) < (order[$1.id] ?? 0) : a > b
         }
     }

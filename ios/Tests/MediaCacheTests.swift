@@ -80,6 +80,9 @@ final class MediaCacheTests: XCTestCase {
         for index in 0..<4 {
             _ = try await cache.data(for: MediaCacheKey(resource: "image-\(index)", variant: "raw")) { Data(repeating: 7, count: 24) }
         }
+        XCTAssertLessThanOrEqual(try diskUsage(folder), 64)
+    }
+    private func diskUsage(_ folder: URL) throws -> Int {
         var size = 0
         if let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
             for case let file as URL in files {
@@ -87,6 +90,6 @@ final class MediaCacheTests: XCTestCase {
                 if values.isRegularFile == true { size += values.fileSize ?? 0 }
             }
         }
-        XCTAssertLessThanOrEqual(size, 64)
+        return size
     }
 }

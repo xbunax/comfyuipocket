@@ -193,8 +193,8 @@ enum WorkflowNodePurpose: String, CaseIterable, Identifiable {
         if fields.contains(where: { $0.key == "text" || $0.key.lowercased().contains("prompt") })
             || type.contains("textencode") || type.contains("conditioning") { return .prompts }
         if fields.contains(where: { MediaFile.kind(for: $0) != nil }) { return .media }
+        if ["sampler", "scheduler", "sampling", "noise", "guider"].contains(where: { type.contains($0) }) { return .sampling }
         if ["loader", "checkpoint", "lora", "clip", "model"].contains(where: { type.contains($0) }) { return .models }
-        if ["sampler", "scheduler", "noise", "guider"].contains(where: { type.contains($0) }) { return .sampling }
         if ["latent", "resize", "scale", "resolution", "vae"].contains(where: { type.contains($0) })
             || fields.contains(where: { ["width", "height"].contains($0.key) }) { return .dimensions }
         return .other
