@@ -173,12 +173,60 @@ enum InputSchema {
     }
 }
 
-struct OutputImage: Identifiable {
+enum WorkflowNodePurpose: String, CaseIterable, Identifiable {
+    case prompts, media, models, sampling, dimensions, outputs, other
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .prompts: return "提示词"
+        case .media: return "图片与媒体"
+        case .models: return "模型与加载"
+        case .sampling: return "采样与生成"
+        case .dimensions: return "尺寸与潜空间"
+        case .outputs: return "输出与保存"
+        case .other: return "其他节点"
+        }
+    }
+    static func classify(_ fields: [WorkflowField]) -> Self {
+        let type = fields.first?.classType.lowercased() ?? ""
+        if type.contains("save") || type.contains("preview") || type.contains("output") { return .outputs }
+        if fields.contains(where: { $0.key == "text" || $0.key.lowercased().contains("prompt") })
+            || type.contains("textencode") || type.contains("conditioning") { return .prompts }
+        if fields.contains(where: { MediaFile.kind(for: $0) != nil }) { return .media }
+        if ["loader", "checkpoint", "lora", "clip", "model"].contains(where: { type.contains($0) }) { return .models }
+        if ["sampler", "scheduler", "noise", "guider"].contains(where: { type.contains($0) }) { return .sampling }
+        if ["latent", "resize", "scale", "resolution", "vae"].contains(where: { type.contains($0) })
+            || fields.contains(where: { ["width", "height"].contains($0.key) }) { return .dimensions }
+        return .other
+    }
+}
+
+struct WorkflowNodeSection: Identifiable {
+    let id: String
+    let fields: [WorkflowField]
+    var title: String { fields.first?.nodeTitle ?? id }
+    var purpose: WorkflowNodePurpose { WorkflowNodePurpose.classify(fields) }
+}
+
+extension Workflow {
+    var nodeSections: [WorkflowNodeSection] {
+        let fields = self.fields
+        return Dictionary(grouping: fields, by: \.nodeID).map { WorkflowNodeSection(id: $0.key, fields: $0.value) }
+            .sorted { a, b in
+                let ai = fields.firstIndex(where: { $0.nodeID == a.id }) ?? 0
+                let bi = fields.firstIndex(where: { $0.nodeID == b.id }) ?? 0
+                return ai < bi
+            }
+    }
+}
+
+struct OutputImage: Codable, Equatable, Identifiable {
     let promptID: String
     let filename: String
     let subfolder: String
     let type: String
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
+    var assetID: String { "\(type)/\(subfolder)/\(filename)" }
     var isVideo: Bool { ["mp4", "mov", "webm", "m4v", "avi", "mkv"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
     var mimeType: String {
         switch URL(fileURLWithPath: filename).pathExtension.lowercased() {

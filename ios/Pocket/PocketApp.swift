@@ -106,6 +106,13 @@ struct ConnectionView: View {
                     Text("ComfyUI 原生接口没有访问密码。仅在可信局域网内使用，不要把端口开放到公网。")
                     Text("连接后工作流会自动双向同步；直接导入 API JSON 和运行任务不依赖插件。")
                 }.font(.footnote)
+                Section("图片缓存") {
+                    Text("自动复用图片和视频首帧预览，内存上限 32 MB，磁盘上限 256 MB。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("清理图片缓存", systemImage: "arrow.clockwise") {
+                        Task { await MediaCache.shared.clear(); store.notice = "图片缓存已清理。" }
+                    }
+                }
             }
             .navigationTitle("连接")
         }

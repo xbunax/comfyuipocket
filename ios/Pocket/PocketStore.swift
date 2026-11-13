@@ -24,6 +24,10 @@ final class PocketStore {
     var prompts: [SavedPrompt] = []
     var pinnedWorkflows: [String] = []
     var generationTasks: [GenerationTask] = []
+    var mediaArchives: [String: MediaArchive] = [:]
+    var pluginCapabilities: Set<String> = []
+    var deletingTasks: Set<String> = []
+    var deletingOutputs: Set<String> = []
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var syncLoop: Task<Void, Never>?
@@ -42,12 +46,16 @@ final class PocketStore {
     private static var tasksURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("generation-tasks.json")
     }
+    private static var mediaArchiveURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("media-archive.json")
+    }
     init() {
         profile = (UserDefaults.standard.data(forKey: "server").flatMap { try? JSONDecoder().decode(ServerProfile.self, from: $0) }) ?? ServerProfile()
         workflows = (try? JSONDecoder().decode([Workflow].self, from: Data(contentsOf: Self.libraryURL))) ?? []
         prompts = (try? JSONDecoder().decode([SavedPrompt].self, from: Data(contentsOf: Self.promptsURL))) ?? []
         pinnedWorkflows = UserDefaults.standard.stringArray(forKey: "pinnedWorkflows") ?? []
         generationTasks = (try? JSONDecoder().decode([GenerationTask].self, from: Data(contentsOf: Self.tasksURL))) ?? []
+        mediaArchives = (try? JSONDecoder().decode([String: MediaArchive].self, from: Data(contentsOf: Self.mediaArchiveURL))) ?? [:]
         for index in generationTasks.indices { generationTasks[index].submitting = false }
         recentPrompts = (UserDefaults.standard.data(forKey: "recentPrompts").flatMap { try? JSONDecoder().decode([String: [String]].self, from: $0) }) ?? [:]
         syncRecords = (UserDefaults.standard.data(forKey: "syncRecords").flatMap { try? JSONDecoder().decode([String: SyncRecord].self, from: $0) }) ?? [:]
@@ -109,17 +117,33 @@ final class PocketStore {
     private func savePinned() {
         UserDefaults.standard.set(pinnedWorkflows, forKey: "pinnedWorkflows")
     }
-    private func saveRecentPrompts() {
+    func saveRecentPrompts() {
         UserDefaults.standard.set(try? JSONEncoder().encode(recentPrompts), forKey: "recentPrompts")
     }
-    private func saveGenerationTasks() {
+    func saveGenerationTasks() {
         do {
             try JSONEncoder().encode(generationTasks).write(to: Self.tasksURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         } catch { self.error = "任务记录保存失败：\(error.localizedDescription)" }
     }
+    func persistMediaArchives() throws {
+        try JSONEncoder().encode(mediaArchives).write(to: Self.mediaArchiveURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    func mergeMedia(_ history: JSONValue, server: String) throws {
+        var archive = mediaArchives[server] ?? MediaArchive()
+        archive.ingest(history)
+        if archive != mediaArchives[server] {
+            mediaArchives[server] = archive
+            try persistMediaArchives()
+        }
+    }
+    var currentMediaArchive: MediaArchive {
+        guard let server = client?.baseURL.absoluteString else { return MediaArchive() }
+        return mediaArchives[server] ?? MediaArchive()
+    }
     var currentGenerationTasks: [GenerationTask] {
         guard let server = client?.baseURL.absoluteString else { return [] }
-        return generationTasks.filter { $0.server == server }.sorted { $0.createdAt > $1.createdAt }
+        let hidden = mediaArchives[server]?.deletedTaskIDs ?? []
+        return generationTasks.filter { $0.server == server && !hidden.contains($0.id) }.sorted { $0.createdAt > $1.createdAt }
     }
     func isPinned(_ id: String) -> Bool { pinnedWorkflows.contains(id) }
     func togglePinned(_ id: String) {
@@ -175,7 +199,9 @@ final class PocketStore {
             startEvents(next)
             await refresh()
             do { nodeInfo = try await next.json("object_info") } catch { self.notice = "节点元信息暂不可用，仍可编辑已有参数。" }
-            pluginAvailable = (try? await next.json("pocket/v1/info"))?["version"].text.nonEmpty != nil
+            let pluginInfo = try? await next.json("pocket/v1/info")
+            pluginAvailable = pluginInfo?["version"].text.nonEmpty != nil
+            pluginCapabilities = Set(pluginInfo?["capabilities"].array.map(\.text) ?? [])
             if pluginAvailable {
                 await syncNow()
             } else {
@@ -192,6 +218,7 @@ final class PocketStore {
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
         preview = nil; progress = 0; activeNode = ""; activePrompt = ""
         pluginAvailable = false; syncing = false; syncStatus = "等待连接"
+        pluginCapabilities = []
     }
     private func startEvents(_ api: ComfyClient) {
         events?.cancel()
@@ -246,7 +273,8 @@ final class PocketStore {
             let q = try await api.json("queue")
             let h = try await api.json("history", query: [.init(name: "max_items", value: "200")])
             guard client === api else { return }
-            queue = q; history = h
+            try mergeMedia(h, server: api.baseURL.absoluteString)
+            queue = q; history = currentMediaArchive.visibleHistory(h)
             restoreGenerationTasks(server: api.baseURL.absoluteString)
         } catch { if client === api { notice = "刷新失败：\(error.localizedDescription)" } }
     }
@@ -341,6 +369,8 @@ final class PocketStore {
             let id = meta["id"].text
             let promptID = row.array[1].text
             guard !id.isEmpty, !promptID.isEmpty else { continue }
+            let archive = mediaArchives[server] ?? MediaArchive()
+            guard !archive.deletedTaskIDs.contains(id), !archive.deletedPromptIDs.contains(promptID) else { continue }
             var index = generationTasks.firstIndex { $0.id == id && $0.server == server }
             if index == nil {
                 generationTasks.append(GenerationTask(id: id, server: server, workflowID: meta["workflow_id"].text,
@@ -498,26 +528,34 @@ final class PocketStore {
     func recentPromptIDs(for workflowID: String) -> [String] {
         recentPrompts[workflowID] ?? []
     }
+    func forgetPromptIDs(_ ids: Set<String>) {
+        for key in Array(recentPrompts.keys) { recentPrompts[key]?.removeAll { ids.contains($0) } }
+        saveRecentPrompts()
+    }
+    func latestTask(for workflowID: String) -> GenerationTask? {
+        currentGenerationTasks.first { $0.workflowID == workflowID }
+    }
+    func latestPromptIDs(for workflowID: String) -> [String] {
+        WorkflowResults.latestPromptIDs(workflowID: workflowID, tasks: currentGenerationTasks,
+                                       legacyIDs: (recentPrompts[workflowID] ?? []).filter { !currentMediaArchive.deletedPromptIDs.contains($0) })
+    }
     func isActivePrompt(for workflowID: String) -> Bool {
-        guard !activePrompt.isEmpty else { return false }
-        return (recentPrompts[workflowID] ?? []).contains(activePrompt)
+        !activePrompt.isEmpty && latestPromptIDs(for: workflowID).contains(activePrompt)
     }
     func hasQueuedPrompt(for workflowID: String) -> Bool {
-        let ids = Set(recentPrompts[workflowID] ?? [])
-        guard !ids.isEmpty else { return false }
-        return (queue["queue_running"].array + queue["queue_pending"].array).contains { item in
-            item.array.count > 1 && ids.contains(item.array[1].text)
+        let ids = Set(latestPromptIDs(for: workflowID))
+        return (queue["queue_running"].array + queue["queue_pending"].array).contains {
+            $0.array.count > 1 && ids.contains($0.array[1].text)
         }
     }
-    func images(forWorkflow workflowID: String) -> [OutputImage] {
-        var result: [OutputImage] = []
+    func outputs(forPromptID promptID: String) -> [OutputImage] {
         var seen = Set<String>()
-        for promptID in recentPrompts[workflowID] ?? [] {
-            for item in OutputImage.fromHistoryEntry(history[promptID], promptID: promptID) where seen.insert(item.id).inserted {
-                result.append(item)
-            }
-        }
-        return result
+        let items = OutputImage.fromHistoryEntry(history[promptID], promptID: promptID)
+            + currentMediaArchive.outputs.filter { $0.promptID == promptID }
+        return currentMediaArchive.visible(items).filter { seen.insert($0.id).inserted }
+    }
+    func images(forWorkflow workflowID: String) -> [OutputImage] {
+        latestPromptIDs(for: workflowID).flatMap { outputs(forPromptID: $0) }
     }
     func queueItem(promptID: String) -> JSONValue? {
         (queue["queue_running"].array + queue["queue_pending"].array).first { item in
@@ -541,6 +579,6 @@ final class PocketStore {
         }.map { $0.key }
     }
     var images: [OutputImage] {
-        OutputImage.fromHistory(history)
+        currentMediaArchive.gallery
     }
 }

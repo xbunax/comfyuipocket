@@ -196,6 +196,7 @@ struct WorkflowEditor: View {
     @State private var document = WorkflowDocument(data: Data())
     @State private var batchCount = 1
     @State private var randomizeBatchSeeds = true
+    @State private var showBatchSettings = false
     @State private var selectedOutput: OutputImage?
     private var index: Int? { store.workflows.firstIndex { $0.id == id } }
     var body: some View {
@@ -215,7 +216,7 @@ struct WorkflowEditor: View {
                                 store.togglePinned(id)
                             }
                         }.font(.caption).buttonStyle(.borderless)
-                        Text("提示词和常用参数优先展示。点击图钉收藏；在“排列”中拖动调整顺序。")
+                        Text("参数按功能和节点折叠收纳。点击图钉收藏；在“排列”中拖动调整参数顺序。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if arranging {
@@ -228,27 +229,9 @@ struct WorkflowEditor: View {
                             }
                         }.environment(\.editMode, .constant(.active))
                     } else {
-                        ForEach(workflow.fields) { field in
-                            Section {
-                                ParameterEditor(field: field, schema: store.nodeInfo[field.classType], preferenceKey: id, value: Binding(
-                                    get: { store.workflows[index].prompt[field.nodeID]?["inputs"][field.key] ?? field.value },
-                                    set: { store.workflows[index].set(field, value: $0); store.save(); store.touch(id) }
-                                ))
-                            } header: {
-                                HStack {
-                                    Text("\(field.nodeTitle) · \(field.key)")
-                                    Spacer()
-                                    Button {
-                                        if workflow.pinned.contains(field.id) { store.workflows[index].pinned.removeAll { $0 == field.id } }
-                                        else { store.workflows[index].pinned.append(field.id) }
-                                        store.save(); store.touch(id)
-                                    } label: { Image(systemName: workflow.pinned.contains(field.id) ? "pin.fill" : "pin") }
-                                        .accessibilityLabel("收藏参数 \(field.key)")
-                                }
-                            }
-                        }
-                        if !store.recentPromptIDs(for: id).isEmpty || !outputs.isEmpty {
-                            Section("生成结果") {
+                        WorkflowParameters(workflow: workflow)
+                        if store.latestTask(for: id) != nil || !store.latestPromptIDs(for: id).isEmpty {
+                            Section("最新任务生成结果") {
                                 if store.isActivePrompt(for: id), let data = store.preview, let image = UIImage(data: data) {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("实时预览").font(.caption).foregroundStyle(.secondary)
@@ -289,14 +272,7 @@ struct WorkflowEditor: View {
                             Text("\(workflow.prompt.count) 个节点").font(.caption2).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Menu {
-                            Picker("批次内生成数量", selection: $batchCount) {
-                                ForEach([1, 2, 3, 4, 6, 8, 12], id: \.self) { count in
-                                    Text("\(count) 次生成 · 合并为一个任务").tag(count)
-                                }
-                            }
-                            Toggle("后续任务随机种子", isOn: $randomizeBatchSeeds)
-                        } label: {
+                        Button { showBatchSettings = true } label: {
                             Label(batchCount > 1 ? "×\(batchCount)" : "批量", systemImage: "square.stack.3d.up")
                         }.buttonStyle(.glass).disabled(store.busy)
                         Button {
@@ -322,12 +298,34 @@ struct WorkflowEditor: View {
                 }
                 .sheet(isPresented: $showGraph) { GraphView(workflow: workflow) }
                 .sheet(isPresented: $showCanvas) { WorkflowCanvasView(workflow: workflow) }
+                .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount, randomizeSeeds: $randomizeBatchSeeds) }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: workflow.name) { result in
                     if case .failure(let error) = result { store.error = error.localizedDescription }
                 }
             } else { ContentUnavailableView("工作流已删除", systemImage: "doc") }
         }
         .navigationTitle("创作").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct BatchSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var count: Int
+    @Binding var randomizeSeeds: Bool
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("\(count) 次生成").font(.title2.bold().monospacedDigit())
+                        .frame(maxWidth: .infinity).padding(.vertical, 4)
+                    Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
+                        .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
+                    HStack { Text("1 次"); Spacer(); Text("20 次") }.font(.caption).foregroundStyle(.secondary)
+                } header: { Text("批量次数") } footer: { Text("这批生成会合并显示为一个任务。") }
+                Section { Toggle("后续生成随机种子", isOn: $randomizeSeeds) }
+            }.navigationTitle("批量生成").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }.presentationDetents([.medium])
     }
 }
 

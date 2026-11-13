@@ -38,6 +38,10 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         previous_folder_paths = sys.modules.get("folder_paths")
         folder_paths = types.ModuleType("folder_paths")
         folder_paths.get_public_user_directory = lambda user: str(root / user)
+        folder_paths.get_output_directory = lambda: str(root / "output")
+        folder_paths.get_temp_directory = lambda: str(root / "temp")
+        self.media_root = root / "output"
+        self.media_root.mkdir()
         sys.modules["folder_paths"] = folder_paths
 
         def restore_folder_paths():
@@ -57,7 +61,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         package = types.ModuleType("pocket_test_plugin")
         package.__path__ = [str(ROOT / "server/comfyui_pocket")]
         sys.modules["pocket_test_plugin"] = package
-        for part in ("catalog", "routes"):
+        for part in ("catalog", "media", "routes"):
             name = f"pocket_test_plugin.{part}"
             spec = importlib.util.spec_from_file_location(name, ROOT / f"server/comfyui_pocket/{part}.py")
             module = importlib.util.module_from_spec(spec)
@@ -70,6 +74,28 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
         self.addAsyncCleanup(self.client.close)
+
+    async def test_media_delete_is_scoped_idempotent_and_requires_same_origin(self):
+        target = self.media_root / "nested" / "a.png"
+        target.parent.mkdir(); target.write_bytes(b"preview")
+        body = {"filename": "a.png", "subfolder": "nested", "type": "output"}
+        denied = await self.client.post("/pocket/v1/media/delete", json=body, headers={"Origin": "https://example.com"})
+        self.assertEqual(denied.status, 403); self.assertTrue(target.exists())
+        deleted = await self.client.post("/pocket/v1/media/delete", json=body)
+        self.assertEqual(deleted.status, 200); self.assertFalse(target.exists())
+        repeated = await self.client.post("/pocket/v1/media/delete", json=body)
+        self.assertTrue((await repeated.json())["alreadyMissing"])
+
+    async def test_media_delete_rejects_traversal_inputs_and_nonmedia_files(self):
+        protected = self.media_root / "keep.json"; protected.write_text("{}")
+        for body in [
+            {"filename": "keep.json"}, {"filename": "../x.png"}, {"filename": "x.png", "subfolder": "../default"},
+            {"filename": "x.png", "subfolder": "/tmp"}, {"filename": "x.png", "type": "input"},
+            {"filename": "x.png", "subfolder": "C:\\output"}, {"filename": "x.png\x00"}, []
+        ]:
+            response = await self.client.post("/pocket/v1/media/delete", json=body)
+            self.assertEqual(response.status, 400, body)
+        self.assertTrue(protected.exists())
 
     async def test_export_list_download_delete_roundtrip(self):
         body = {"name": "Example", "prompt": {"1": {"class_type": "Example", "inputs": {"seed": 9007199254740993}}}}

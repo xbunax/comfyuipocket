@@ -6,6 +6,38 @@ import XCTest
 #endif
 
 final class ModelTests: XCTestCase {
+    func testWorkflowNodesAreGroupedByFunctionWithoutLosingOrDuplicatingParameters() throws {
+        let json = #"{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"portrait"}},"2":{"class_type":"LoadImage","inputs":{"image":"a.png"}},"3":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},"4":{"class_type":"KSampler","inputs":{"steps":20,"cfg":7}},"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}},"6":{"class_type":"SaveImage","inputs":{"filename_prefix":"output"}}}"#
+        let workflow = try Workflow.load(Data(json.utf8), name: "Grouped")
+        let sections = workflow.nodeSections
+        XCTAssertEqual(sections.count, 6)
+        let purposes = Dictionary(uniqueKeysWithValues: sections.map { ($0.id, $0.purpose) })
+        XCTAssertEqual(purposes["1"], .prompts); XCTAssertEqual(purposes["2"], .media)
+        XCTAssertEqual(purposes["3"], .models); XCTAssertEqual(purposes["4"], .sampling)
+        XCTAssertEqual(purposes["5"], .dimensions); XCTAssertEqual(purposes["6"], .outputs)
+        XCTAssertEqual(Set(sections.flatMap { $0.fields.map(\.id) }), Set(workflow.fields.map(\.id)))
+        XCTAssertEqual(sections.flatMap(\.fields).count, workflow.fields.count)
+    }
+    func testDeletingTaskHistoryPreservesWorksButRemovedWorksStayRemoved() throws {
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p1":{"prompt":[1],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))
+        var archive = MediaArchive(); archive.ingest(history)
+        archive.deletedPromptIDs.insert("p1")
+        XCTAssertTrue(archive.visibleHistory(history).object.isEmpty)
+        XCTAssertEqual(archive.gallery.count, 1)
+        archive.remove(try XCTUnwrap(archive.gallery.first)); archive.ingest(history)
+        XCTAssertTrue(archive.gallery.isEmpty)
+        let restored = try JSONDecoder().decode(MediaArchive.self, from: JSONEncoder().encode(archive))
+        XCTAssertEqual(restored, archive)
+    }
+    func testNewestBatchIncludesAllItsGenerationsAndDoesNotFallBackToOlderResults() {
+        let old = GenerationTask(id: "old", server: "s", workflowID: "w", name: "Old", createdAt: 1, requestedCount: 1,
+            items: [GenerationItem(id: "p1", prompt: [:])])
+        var latest = GenerationTask(id: "new", server: "s", workflowID: "w", name: "New", createdAt: 2, requestedCount: 2)
+        XCTAssertEqual(WorkflowResults.latestPromptIDs(workflowID: "w", tasks: [old, latest], legacyIDs: ["legacy"]), [])
+        latest.items = [GenerationItem(id: "p2", prompt: [:]), GenerationItem(id: "p3", prompt: [:])]
+        XCTAssertEqual(WorkflowResults.latestPromptIDs(workflowID: "w", tasks: [latest, old], legacyIDs: ["legacy"]), ["p2", "p3"])
+        XCTAssertEqual(WorkflowResults.latestPromptIDs(workflowID: "w", tasks: [], legacyIDs: ["legacy", "older"]), ["legacy"])
+    }
     func testPromptBoardDragOrderAndMovingAcrossCategories() {
         var board = PromptBoardDocument(text: "one, two, (three:1.20)")
         let one = board.blocks[0].id; let two = board.blocks[1].id; let three = board.blocks[2].id

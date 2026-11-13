@@ -7,6 +7,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .catalog import Catalog, MAX_BYTES, VERSION
+from .media import delete_media
 
 
 def same_origin(request):
@@ -62,7 +63,24 @@ def register_routes():
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete"]})
+
+    @routes.post("/pocket/v1/media/delete")
+    async def remove_media(request):
+        import folder_paths
+
+        same_origin(request)
+        catalog_for(request)  # Enforce ComfyUI user access before touching media.
+        data = await read_json(request)
+        try:
+            result = await asyncio.to_thread(delete_media, data, {
+                "output": folder_paths.get_output_directory(), "temp": folder_paths.get_temp_directory()
+            })
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        except OSError as exc:
+            raise web.HTTPConflict(text="Unable to delete this media file") from exc
+        return web.json_response(result)
 
     @routes.get("/pocket/v1/comfy-workflows")
     async def comfy_workflows(request):

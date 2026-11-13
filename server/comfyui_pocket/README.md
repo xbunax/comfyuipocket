@@ -27,3 +27,5 @@ time.
 
 These endpoints share ComfyUI's network trust boundary; they do not add authentication
 to ComfyUI. Use a trusted LAN or Tailscale with ACLs, never an exposed public port.
+
+Version 0.5.0 adds `POST /pocket/v1/media/delete` with JSON filename, subfolder and type (output/temp only). The phone offers a confirmation before permanent deletion. This endpoint validates origin/user routing, rejects traversal, nonmedia files and symlinks, and is idempotent for missing files. Update the plugin and restart ComfyUI to enable server-file deletion; phone-only gallery removal does not require it.

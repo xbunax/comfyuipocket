@@ -1,22 +1,29 @@
-ComfyUI Pocket v0.4.1
+ComfyUI Pocket v0.5.0
 
-- Prompt blocks now use compact, wrapping word chips inside category cards instead
-  of a vertical list of text editors. Inline block mode and the full-screen
-  visual editor both use the new layout.
-- Tap a chip to edit its text, weight, enabled state and category. Long-press and
-  drag chips to reorder them or move them between categories. Drop targets are
-  highlighted; canceling a drag does not change prompt order.
-- Add, rename, collapse and reorder categories. Removing a category keeps its
-  words in Uncategorized. Categories, disabled words and ordering persist on the
-  phone for each prompt field, including when switching back to plain text.
-- Chip detail settings include iOS system translation with automatic source
-  detection and English/Chinese language controls. The translated text is shown
-  first and only replaces the chip after tapping Use Translation. Weight and
-  category remain unchanged. First use may require a system language download.
-- Saved prompt versions, raw text editing and existing workflow functionality
-  remain available. Merely opening or canceling the visual editor does not rewrite
-  the original prompt.
+- Delete task records from the task list or details. Pending generations in that
+  task are canceled; currently running generations must be stopped first. Generated
+  works are preserved independently of task history.
+- Delete works from the gallery or preview. Remove from this phone only, or
+  permanently delete the matching server output/temp file with Pocket plugin
+  v0.5.0. Deleted works stay removed after refresh and their image caches are purged.
+- Workflow results show only the newest submission, including every generation in
+  a batch. A pending, failed or empty newest task does not display older results.
+- Shared memory/disk image caching covers originals, thumbnails, input images and
+  video first frames. Simultaneous requests share one load. Cache keys separate
+  servers and generations, uploads/deletions invalidate cached content, and cache
+  storage is bounded at 32 MB in memory and 256 MB on disk. Clear it in Connection.
+- Set batch generation count with a slider from 1 to 20, keeping the random-seed
+  toggle and one-task batch presentation.
+- Workflow parameters are organized by function, then by node. Collapse or expand
+  individual nodes, function groups, or all nodes; expansion state is remembered.
+  Parameter pinning, ordering and editing remain available.
 
-The ComfyUI plugin is unchanged; update only the iOS IPA.
-Simulator tests are not run for this release. The IPA is built directly for device
-installation and physical-device testing. Sign the unsigned IPA before installing.
+Plugin update:
+
+Install the new comfyui_pocket-plugin.zip over the existing plugin and restart
+ComfyUI to enable permanent server-file deletion. Existing plugins can still run
+workflows, sync and use phone-only work removal. The new endpoint only permits
+media files under output/temp; input files, traversal and symbolic links are rejected.
+
+Simulator tests are skipped. The device IPA is compiled directly for user testing.
+Sign ComfyUIPocket-unsigned.ipa before installing. SHA256SUMS.txt checks all assets.

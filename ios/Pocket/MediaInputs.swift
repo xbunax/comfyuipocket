@@ -7,6 +7,21 @@ import UniformTypeIdentifiers
 import ImageIO
 
 @MainActor enum MediaThumbnail {
+    static func cached(url: URL, revision: String, kind: MediaKind, lifetime: TimeInterval = 7 * 86400,
+                       load: @escaping @MainActor @Sendable () async throws -> Data) async throws -> UIImage {
+        let key = MediaCacheKey(resource: MediaCacheKey.resource(url), variant: "thumbnail:\(revision)")
+        let encoded = try await MediaCache.shared.data(for: key, lifetime: lifetime) { @MainActor in
+            let bitmap: UIImage?
+            if kind == .video { bitmap = await video(url) }
+            else { bitmap = image(try await load()) }
+            let hasAlpha = bitmap?.cgImage.map { [.first, .last, .premultipliedFirst, .premultipliedLast].contains($0.alphaInfo) } ?? false
+            let data = hasAlpha ? bitmap?.pngData() : bitmap?.jpegData(compressionQuality: 0.85)
+            guard let data else { throw PocketError.message("无法生成文件预览。") }
+            return data
+        }
+        guard let result = UIImage(data: encoded) else { throw PocketError.message("无法读取预览缓存。") }
+        return result
+    }
     static func image(_ data: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -194,11 +209,17 @@ struct InputMediaPreview: View {
             let decoded: UIImage?
             if kind == .video {
                 // AVFoundation requests the first frame with HTTP range requests.
-                decoded = await MediaThumbnail.video(api.inputMediaURL(value))
+                decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .video, lifetime: 60) {
+                    try await api.inputMedia(value)
+                }
             } else {
-                let data = try await api.inputMedia(value)
-                if kind == .image { decoded = MediaThumbnail.image(data) }
+                if kind == .image {
+                    decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .image, lifetime: 60) {
+                        try await api.inputMedia(value)
+                    }
+                }
                 else {
+                    let data = try await api.inputMedia(value)
                     let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(MediaFile.split(value).filename)")
                     try data.write(to: file)
                     decoded = await MediaThumbnail.file(file)

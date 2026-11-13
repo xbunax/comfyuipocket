@@ -5,6 +5,7 @@ import AVKit
 struct QueueView: View {
     @Environment(PocketStore.self) private var store
     @State private var confirming = false
+    @State private var removing: TaskRemovalTarget?
     private var knownIDs: Set<String> { Set(store.currentGenerationTasks.flatMap { $0.items.map(\.id) }) }
     private var activeTasks: [GenerationTask] {
         store.currentGenerationTasks.filter { $0.submitting || $0.summary(queue: store.queue, history: store.history).active }
@@ -41,6 +42,7 @@ struct QueueView: View {
                             Label(String(id.prefix(8)), systemImage: store.isRunning(id) ? "play.circle" : "clock")
                         }.swipeActions {
                             if store.isPending(id) { Button("取消", role: .destructive) { Task { await store.deletePending(id) } } }
+                            if !store.isRunning(id) { Button("删除", role: .destructive) { removing = .prompt(id) } }
                         }
                     }
                 }
@@ -50,9 +52,11 @@ struct QueueView: View {
                         NavigationLink { TaskDetailView(promptID: id) } label: {
                             Label(String(id.prefix(8)), systemImage: store.history[id]["status"]["status_str"].text == "error" ? "exclamationmark.circle" : "checkmark.circle")
                         }
+                        .swipeActions { Button("删除", role: .destructive) { removing = .prompt(id) } }
                     }
                 }
             }.navigationTitle("任务").refreshable { await store.refresh() }
+                .taskDeletionDialog($removing)
                 .confirmationDialog("停止服务器当前运行的生成？", isPresented: $confirming, titleVisibility: .visible) {
                     Button("停止当前生成", role: .destructive) { Task { await store.interrupt() } }
                 } message: { Text("此操作会影响服务器当前执行的生成。批次中等待执行的项目可在任务详情中统一取消。") }
@@ -75,6 +79,8 @@ struct QueueView: View {
                 }
             }.padding(.vertical, 4)
         }.swipeActions {
+            Button("删除", role: .destructive) { removing = .task(task) }
+                .disabled(task.submitting || summary.running > 0 || store.deletingTasks.contains(task.id))
             if summary.pending > 0 && !task.submitting {
                 Button("取消待执行项", role: .destructive) { Task { await store.cancelPending(in: task) } }
             }
@@ -84,14 +90,16 @@ struct QueueView: View {
 
 struct GenerationTaskDetailView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     let taskID: String
     @State private var selectedOutput: OutputImage?
+    @State private var removing: TaskRemovalTarget?
     private var task: GenerationTask? { store.currentGenerationTasks.first { $0.id == taskID } }
     var body: some View {
         Group {
             if let task {
                 let summary = task.summary(queue: store.queue, history: store.history)
-                let outputs = task.items.flatMap { OutputImage.fromHistoryEntry(store.history[$0.id], promptID: $0.id) }
+                let outputs = task.items.flatMap { store.outputs(forPromptID: $0.id) }
                 List {
                     Section("任务概况") {
                         Text(task.title).font(.headline)
@@ -142,12 +150,17 @@ struct GenerationTaskDetailView: View {
                         Section { Button("取消本任务全部待执行项", role: .destructive) { Task { await store.cancelPending(in: task) } } }
                     }
                 }.navigationTitle(task.requestedCount > 1 ? "批量任务详情" : "任务详情")
+                    .toolbar {
+                        Button("删除任务", systemImage: "trash", role: .destructive) { removing = .task(task) }
+                            .disabled(task.submitting || summary.running > 0 || store.deletingTasks.contains(task.id))
+                    }
             } else {
                 ContentUnavailableView("任务不可用", systemImage: "clock", description: Text("请连接提交任务时的服务器。"))
             }
         }
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
+        .taskDeletionDialog($removing, onDeleted: { dismiss() })
         .refreshable { await store.refresh() }
     }
     private func itemStatus(_ item: GenerationItem) -> String {
@@ -163,10 +176,12 @@ struct GenerationTaskDetailView: View {
 
 struct TaskDetailView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     let promptID: String
     var snapshot: [String: JSONValue]? = nil
     var cancelled = false
     @State private var selectedOutput: OutputImage?
+    @State private var removing: TaskRemovalTarget?
 
     private var entry: JSONValue? {
         let value = store.history[promptID]
@@ -195,8 +210,7 @@ struct TaskDetailView: View {
         } ?? []
     }
     private var outputs: [OutputImage] {
-        guard let entry else { return [] }
-        return OutputImage.fromHistoryEntry(entry, promptID: promptID)
+        store.outputs(forPromptID: promptID)
     }
     private var errorMessage: String? {
         guard let entry else { return nil }
@@ -289,6 +303,13 @@ struct TaskDetailView: View {
         }
         .navigationTitle("任务详情").navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
+        .toolbar {
+            if !store.currentGenerationTasks.contains(where: { $0.items.contains(where: { $0.id == promptID }) }) {
+                Button("删除任务", systemImage: "trash", role: .destructive) { removing = .prompt(promptID) }
+                    .disabled(store.isRunning(promptID))
+            }
+        }
+        .taskDeletionDialog($removing, onDeleted: { dismiss() })
         .refreshable { await store.refresh() }
     }
 }
@@ -296,22 +317,31 @@ struct TaskDetailView: View {
 struct GalleryView: View {
     @Environment(PocketStore.self) private var store
     @State private var selected: OutputImage?
+    @State private var removing: OutputImage?
     var body: some View {
         NavigationStack {
             ZStack {
                 PocketBackground()
                 if store.images.isEmpty {
-                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后，可查看最近 50 次任务生成的图片和视频。"))
+                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后自动收集作品。删除任务记录后，已收集的作品仍会保留。"))
                 } else {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                             ForEach(store.images) { image in
-                                Button { selected = image } label: {
-                                    VStack(alignment: .leading, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Button { selected = image } label: {
                                         RemoteImage(output: image).frame(height: 180).clipped().clipShape(.rect(cornerRadius: 20))
+                                    }.buttonStyle(.plain)
+                                    HStack {
                                         Text(image.filename).font(.caption).lineLimit(1).foregroundStyle(.primary)
+                                        Spacer(minLength: 0)
+                                        Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
+                                            .labelStyle(.iconOnly).buttonStyle(.borderless)
+                                            .disabled(store.deletingOutputs.contains(image.id))
                                     }
-                                }.buttonStyle(.plain)
+                                }.contextMenu {
+                                    Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
+                                }
                             }
                         }.padding()
                     }.refreshable { await store.refresh() }
@@ -319,6 +349,7 @@ struct GalleryView: View {
             }.navigationTitle("作品")
                 .toolbar { Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh() } }.disabled(!store.connected) }
                 .sheet(item: $selected) { ImageDetail(output: $0) }
+                .workDeletionDialog($removing)
         }
     }
 }
@@ -340,17 +371,14 @@ struct RemoteImage: View {
         }.task(id: "\(store.client?.baseURL.absoluteString ?? "")|\(output.id)") {
             image = nil; failed = false
             do {
-                if output.isVideo, let api = store.client {
-                    let url = api.url("view", query: [.init(name: "filename", value: output.filename), .init(name: "subfolder", value: output.subfolder), .init(name: "type", value: output.type)])
-                    let decoded = await MediaThumbnail.video(url)
-                    guard !Task.isCancelled else { return }
-                    image = decoded; failed = image == nil; return
-                }
-                guard let data = try await store.client?.image(output), let decoded = MediaThumbnail.image(data) else { failed = true; return }
+                guard let api = store.client else { failed = true; return }
+                let decoded = try await MediaThumbnail.cached(url: api.mediaURL(output), revision: output.promptID,
+                    kind: output.isVideo ? .video : .image) { try await api.image(output) }
                 guard !Task.isCancelled else { return }
                 image = decoded
             } catch { if !Task.isCancelled { failed = true } }
-        }
+
+        }.onDisappear { image = nil }
     }
 }
 
@@ -362,6 +390,7 @@ struct ImageDetail: View {
     @State private var shareURL: URL?
     @State private var status = ""
     @State private var player: AVPlayer?
+    @State private var removing: OutputImage?
     var body: some View {
         NavigationStack {
             VStack {
@@ -390,7 +419,14 @@ struct ImageDetail: View {
                 }.padding()
                 if !status.isEmpty { Text(status).font(.caption).padding() }
             }.navigationTitle("作品预览").navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button("完成") { dismiss() } }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("删除作品", systemImage: "trash", role: .destructive) { removing = output }
+                            .disabled(store.deletingOutputs.contains(output.id))
+                    }
+                    ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                }
+                .workDeletionDialog($removing, onDeleted: { dismiss() })
                 .task {
                     do {
                         guard let file = try await store.client?.download(output) else { return }
