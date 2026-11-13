@@ -63,8 +63,12 @@ struct WorkflowParameters: View {
                                 .buttonStyle(.borderless).accessibilityLabel("收藏参数 \(field.key)")
                         }
                         ParameterEditor(field: field, schema: store.nodeInfo[field.classType], preferenceKey: workflow.id,
-                            value: Binding(get: { store.workflows[index].prompt[field.nodeID]?["inputs"][field.key] ?? field.value },
-                                           set: { store.workflows[index].set(field, value: $0); store.save(); store.touch(workflow.id) }))
+                            value: Binding(get: {
+                                store.workflows.first(where: { $0.id == workflow.id })?.prompt[field.nodeID]?["inputs"][field.key] ?? field.value
+                            }, set: { value in
+                                guard let current = store.workflows.firstIndex(where: { $0.id == workflow.id }) else { return }
+                                store.workflows[current].set(field, value: value); store.save(); store.touch(workflow.id)
+                            }))
                     }.padding(.vertical, 8)
                 }
             }

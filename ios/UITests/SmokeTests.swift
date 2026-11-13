@@ -21,7 +21,10 @@ final class SmokeTests: XCTestCase {
         let visual = app.buttons["promptVisualEditor"]
         XCTAssertTrue(visual.waitForExistence(timeout: 5))
         visual.tap()
-        XCTAssertTrue(app.navigationBars["提示词可视化编辑"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["编辑提示词"].waitForExistence(timeout: 5))
+        let toggle = app.switches["promptBlockEditing"]
+        XCTAssertTrue(toggle.exists)
+        if toggle.value as? String == "0" { toggle.tap() }
         let word = app.buttons["promptChip.soft light"]
         XCTAssertTrue(word.exists)
         word.tap()
@@ -29,12 +32,9 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["翻译"].exists)
         app.buttons["取消"].tap()
         let studio = XCTAttachment(screenshot: app.screenshot()); studio.name = "04-PromptStudio"; studio.lifetime = .keepAlways; add(studio)
-        app.buttons["取消"].tap()
-        let toggle = app.switches["promptBlockEditing"]
-        XCTAssertTrue(toggle.exists)
-        if toggle.value as? String == "0" { toggle.tap() }
-        XCTAssertTrue(app.buttons["promptChip.soft light"].exists)
         toggle.tap()
+        XCTAssertTrue(app.textViews["promptTextEditor"].exists)
+        app.buttons["取消"].tap()
         app.swipeUp()
         XCTAssertTrue(app.buttons["inputMediaPreview"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["本地文件"].exists)

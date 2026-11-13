@@ -7,7 +7,7 @@ struct PocketApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environment(store)
-                .tint(.mint)
+                .tint(PocketPalette.accent)
                 .onChange(of: phase) { _, value in
                     if value == .active { Task { await store.resume() } }
                     else if value == .background { store.suspend() }
@@ -42,10 +42,50 @@ struct RootView: View {
     }
 }
 
+enum PocketPalette {
+    static let accent = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemMint : .systemTeal
+    })
+}
+
 struct PocketBackground: View {
     var body: some View {
-        LinearGradient(colors: [.mint.opacity(0.16), .cyan.opacity(0.04), Color(uiColor: .systemBackground)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        LinearGradient(colors: [PocketPalette.accent.opacity(0.07), Color(uiColor: .systemGroupedBackground), Color(uiColor: .systemGroupedBackground)], startPoint: .topLeading, endPoint: .bottomTrailing)
             .ignoresSafeArea()
+    }
+}
+
+/// Shared spacing and background for the app's parameter and activity lists.
+extension View {
+    func pocketListSurface() -> some View {
+        self.listStyle(.insetGrouped)
+            .listSectionSpacing(18)
+            .scrollContentBackground(.hidden)
+            .background(PocketBackground())
+    }
+}
+
+struct PocketMetric: View {
+    let title: String
+    let value: Int
+    let icon: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).foregroundStyle(PocketPalette.accent)
+            Text("\(value)").fontWeight(.semibold).monospacedDigit()
+            Text(title).foregroundStyle(.secondary)
+        }.font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
+            .background(Color.primary.opacity(0.04), in: .capsule)
+            .accessibilityElement(children: .combine)
+    }
+}
+
+struct PocketConnectionSummary: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ConnectionBadge()
+            SyncBadge()
+        }.padding(.vertical, 4)
     }
 }
 
@@ -80,16 +120,18 @@ struct ConnectionView: View {
         NavigationStack {
             Form {
                 Section {
-                    Label("你的算力，随身可用。", systemImage: "sparkles").font(.title2.bold())
-                    Text("通过 IP 与端口直接连接自己的 ComfyUI。工作流和图片在手机与服务器之间传输。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    ConnectionBadge()
-                    SyncBadge()
+                    VStack(alignment: .leading, spacing: 16) {
+                        Label("ComfyUI", systemImage: "server.rack").font(.title2.weight(.semibold))
+                        PocketConnectionSummary()
+                    }.padding(.vertical, 8)
                 }
                 Section("ComfyUI 服务器") {
                     TextField("IP 地址，例如 192.168.1.20", text: $store.profile.host)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                    TextField("端口", text: $store.profile.port).keyboardType(.numberPad)
+                    HStack {
+                        Text("端口")
+                        TextField("端口", text: $store.profile.port).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                    }
                     Toggle("HTTPS", isOn: $store.profile.https)
                 }.disabled(store.connected || store.connecting)
                 Section {
@@ -101,11 +143,15 @@ struct ConnectionView: View {
                         }.buttonStyle(.glassProminent).disabled(store.connecting)
                     }
                 }
-                Section("连接提示") {
-                    Text("ComfyUI 需监听手机能访问的网卡，例如 --listen 0.0.0.0 --port 8188。")
-                    Text("ComfyUI 原生接口没有访问密码。仅在可信局域网内使用，不要把端口开放到公网。")
-                    Text("连接后工作流会自动双向同步；直接导入 API JSON 和运行任务不依赖插件。")
-                }.font(.footnote)
+                Section {
+                    DisclosureGroup("连接帮助") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("ComfyUI 需监听手机能访问的网卡，例如 --listen 0.0.0.0 --port 8188。")
+                            Text("ComfyUI 原生接口没有访问密码。仅在可信局域网内使用，不要把端口开放到公网。")
+                            Text("连接后工作流会自动双向同步；直接导入 API JSON 和运行任务不依赖插件。")
+                        }.font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8)
+                    }
+                }
                 Section("图片缓存") {
                     Text("自动复用图片和视频首帧预览，内存上限 32 MB，磁盘上限 256 MB。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -114,6 +160,7 @@ struct ConnectionView: View {
                     }
                 }
             }
+            .pocketListSurface()
             .navigationTitle("连接")
         }
     }

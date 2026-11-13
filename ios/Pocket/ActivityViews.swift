@@ -21,7 +21,15 @@ struct QueueView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { ConnectionBadge() }
+                Section {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ConnectionBadge()
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { taskMetrics }
+                            VStack(alignment: .leading, spacing: 8) { taskMetrics }
+                        }
+                    }.padding(.vertical, 4)
+                }
                 if store.runningPromptID != nil {
                     Section("当前生成预览") {
                         if let preview = store.preview, let image = UIImage(data: preview) {
@@ -55,29 +63,36 @@ struct QueueView: View {
                         .swipeActions { Button("删除", role: .destructive) { removing = .prompt(id) } }
                     }
                 }
-            }.navigationTitle("任务").refreshable { await store.refresh() }
+            }.pocketListSurface().navigationTitle("任务").refreshable { await store.refresh() }
                 .taskDeletionDialog($removing)
                 .confirmationDialog("停止服务器当前运行的生成？", isPresented: $confirming, titleVisibility: .visible) {
                     Button("停止当前生成", role: .destructive) { Task { await store.interrupt() } }
                 } message: { Text("此操作会影响服务器当前执行的生成。批次中等待执行的项目可在任务详情中统一取消。") }
         }
     }
+    @ViewBuilder private var taskMetrics: some View {
+        PocketMetric(title: "进行中", value: activeTasks.count + otherQueue.count, icon: "clock")
+        PocketMetric(title: "最近任务", value: recentTasks.count + store.sortedHistoryIDs.filter { !knownIDs.contains($0) }.count, icon: "clock.arrow.circlepath")
+    }
     private func taskRow(_ task: GenerationTask) -> some View {
         let summary = task.summary(queue: store.queue, history: store.history)
         return NavigationLink { GenerationTaskDetailView(taskID: task.id) } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    Label(task.title, systemImage: task.requestedCount > 1 ? "square.stack.3d.up" : "play.rectangle")
-                    Spacer()
-                    Text(task.submitting ? "提交中" : (task.submissionError != nil ? "部分提交失败" : summary.label))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Text("已结束 \(summary.finished)/\(task.items.count) · 成功 \(summary.completed) · 失败 \(summary.failed) · 取消 \(summary.cancelled)")
+            VStack(alignment: .leading, spacing: 10) {
+                Label(task.title, systemImage: task.requestedCount > 1 ? "square.stack.3d.up" : "play.rectangle")
+                    .font(.headline).lineLimit(2)
+                Text(task.submitting ? "提交中" : (task.submissionError != nil ? "部分提交失败" : summary.label))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(summary.failed > 0 || task.submissionError != nil ? Color.orange : (summary.active ? PocketPalette.accent : Color.secondary))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.04), in: .capsule)
+                Text("成功 \(summary.completed) · 失败 \(summary.failed) · 取消 \(summary.cancelled)")
                     .font(.caption).foregroundStyle(.secondary)
                 if summary.active || task.submitting {
                     ProgressView(value: Double(summary.finished), total: Double(max(1, task.requestedCount)))
+                    Text("已结束 \(summary.finished) / \(task.items.count)")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
-            }.padding(.vertical, 4)
+            }.padding(.vertical, 8)
         }.swipeActions {
             Button("删除", role: .destructive) { removing = .task(task) }
                 .disabled(task.submitting || summary.running > 0 || store.deletingTasks.contains(task.id))
@@ -149,7 +164,7 @@ struct GenerationTaskDetailView: View {
                     if summary.pending > 0 && !task.submitting {
                         Section { Button("取消本任务全部待执行项", role: .destructive) { Task { await store.cancelPending(in: task) } } }
                     }
-                }.navigationTitle(task.requestedCount > 1 ? "批量任务详情" : "任务详情")
+                }.pocketListSurface().navigationTitle(task.requestedCount > 1 ? "批量任务详情" : "任务详情")
                     .toolbar {
                         Button("删除任务", systemImage: "trash", role: .destructive) { removing = .task(task) }
                             .disabled(task.submitting || summary.running > 0 || store.deletingTasks.contains(task.id))
@@ -301,6 +316,7 @@ struct TaskDetailView: View {
                 }
             }
         }
+        .pocketListSurface()
         .navigationTitle("任务详情").navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
         .toolbar {
@@ -326,20 +342,32 @@ struct GalleryView: View {
                     ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后自动收集作品。删除任务记录后，已收集的作品仍会保留。"))
                 } else {
                     ScrollView {
+                        HStack {
+                            Text("\(store.images.count) 件作品").font(.subheadline.weight(.medium))
+                            Spacer()
+                            Text("最新生成在前").font(.caption).foregroundStyle(.secondary)
+                        }.padding(.horizontal, 20).padding(.top, 8)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
                             ForEach(store.images) { image in
-                                VStack(alignment: .leading, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 0) {
                                     Button { selected = image } label: {
-                                        RemoteImage(output: image).frame(height: 180).clipped().clipShape(.rect(cornerRadius: 20))
+                                        RemoteImage(output: image).frame(height: 180).clipped()
                                     }.buttonStyle(.plain)
                                     HStack {
-                                        Text(image.filename).font(.caption).lineLimit(1).foregroundStyle(.primary)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(image.filename).font(.caption.weight(.medium)).lineLimit(1).foregroundStyle(.primary)
+                                            Text(image.isVideo ? "视频" : "图片").font(.caption2).foregroundStyle(.secondary)
+                                        }
                                         Spacer(minLength: 0)
                                         Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
                                             .labelStyle(.iconOnly).buttonStyle(.borderless)
                                             .disabled(store.deletingOutputs.contains(image.id))
-                                    }
-                                }.contextMenu {
+                                    }.padding(12)
+                                }
+                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
+                                .clipShape(.rect(cornerRadius: 20))
+                                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.04)))
+                                .contextMenu {
                                     Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
                                 }
                             }

@@ -33,7 +33,15 @@ struct LibraryView: View {
                     }
                 } else {
                     List {
-                        Section { ConnectionBadge(); SyncBadge() }.listRowBackground(Color.clear)
+                        Section {
+                            VStack(alignment: .leading, spacing: 14) {
+                                PocketConnectionSummary()
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 8) { libraryMetrics }
+                                    VStack(alignment: .leading, spacing: 8) { libraryMetrics }
+                                }
+                            }.padding(.vertical, 4)
+                        }
                         if searchText.isEmpty {
                             if !pinned.isEmpty {
                                 Section("置顶") {
@@ -71,13 +79,16 @@ struct LibraryView: View {
                                 }
                             }
                         }
-                    }.scrollContentBackground(.hidden)
+                    }.pocketListSurface()
                 }
             }
             .navigationTitle("工作台")
             .searchable(text: $search, prompt: "搜索工作流")
             .navigationDestination(for: String.self) { WorkflowEditor(id: $0) }
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("提示词库", systemImage: "text.book.closed") { showPrompts = true }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("导入 API JSON", systemImage: "doc.badge.plus") { importing = true }
@@ -91,6 +102,11 @@ struct LibraryView: View {
             .sheet(isPresented: $showPrompts) { PromptLibraryView() }
             .refreshable { await store.syncNow() }
         }
+    }
+
+    @ViewBuilder private var libraryMetrics: some View {
+        PocketMetric(title: "工作流", value: store.workflows.count, icon: "square.stack.3d.up")
+        PocketMetric(title: "置顶", value: pinned.count, icon: "pin")
     }
 
     private var searchText: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -139,7 +155,7 @@ struct LibraryView: View {
     @ViewBuilder private func row(for workflow: Workflow) -> some View {
         HStack {
             NavigationLink(value: workflow.id) {
-                WorkflowRow(workflow: workflow, pinned: store.isPinned(workflow.id))
+                WorkflowRow(workflow: workflow)
             }.accessibilityIdentifier("workflow.\(workflow.id)")
             Button { store.togglePinned(workflow.id) } label: {
                 Image(systemName: store.isPinned(workflow.id) ? "pin.fill" : "pin")
@@ -169,19 +185,21 @@ struct LibraryView: View {
 
 private struct WorkflowRow: View {
     let workflow: Workflow
-    let pinned: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "point.3.connected.trianglepath.dotted").foregroundStyle(.mint)
-                Text(workflow.name).font(.headline)
-                if pinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
-            }
-            Text("\(workflow.prompt.count) 个节点 · \(workflow.fields.count) 个可编辑参数")
-                .font(.caption).foregroundStyle(.secondary)
-            if let prompt = workflow.fields.first(where: { $0.key == "text" }) {
-                Text(prompt.value.text).font(.subheadline).lineLimit(2).foregroundStyle(.secondary)
-            }
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.title3).foregroundStyle(PocketPalette.accent)
+                .frame(width: 42, height: 42)
+                .background(PocketPalette.accent.opacity(0.09), in: .rect(cornerRadius: 12))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(workflow.name).font(.headline).lineLimit(2)
+                Text("\(workflow.prompt.count) 个节点 · \(workflow.fields.count) 项参数")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let prompt = workflow.fields.first(where: { $0.key == "text" }), !prompt.value.text.isEmpty {
+                    Text(prompt.value.text).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 8)
     }
 }
@@ -216,7 +234,7 @@ struct WorkflowEditor: View {
                                 store.togglePinned(id)
                             }
                         }.font(.caption).buttonStyle(.borderless)
-                        Text("参数按功能和节点折叠收纳。点击图钉收藏；在“排列”中拖动调整参数顺序。")
+                        Text("\(workflow.prompt.count) 个节点 · \(workflow.fields.count) 项参数")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if arranging {
@@ -265,23 +283,23 @@ struct WorkflowEditor: View {
                         }
                     }
                 }
+                .pocketListSurface()
                 .safeAreaInset(edge: .bottom) {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(store.connected ? "准备就绪" : "先连接服务器").font(.caption.bold())
-                            Text("\(workflow.prompt.count) 个节点").font(.caption2).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        ConnectionBadge()
+                        HStack(spacing: 12) {
+                            Button { showBatchSettings = true } label: {
+                                Label(batchCount > 1 ? "批量 ×\(batchCount)" : "批量", systemImage: "square.stack.3d.up")
+                                    .padding(.vertical, 5)
+                            }.buttonStyle(.glass).disabled(store.busy)
+                            Button {
+                                Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: randomizeBatchSeeds) }
+                            } label: {
+                                Label(store.busy ? "提交中" : (batchCount > 1 ? "运行 ×\(batchCount)" : "运行"), systemImage: "play.fill")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 5)
+                            }.buttonStyle(.glassProminent).disabled(!store.connected || store.busy)
                         }
-                        Spacer()
-                        Button { showBatchSettings = true } label: {
-                            Label(batchCount > 1 ? "×\(batchCount)" : "批量", systemImage: "square.stack.3d.up")
-                        }.buttonStyle(.glass).disabled(store.busy)
-                        Button {
-                            Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: randomizeBatchSeeds) }
-                        } label: {
-                            Label(store.busy ? "提交中" : (batchCount > 1 ? "运行 ×\(batchCount)" : "运行"), systemImage: "play.fill")
-                                .padding(.horizontal, 6)
-                        }.buttonStyle(.glassProminent).disabled(!store.connected || store.busy)
-                    }.padding().glassEffect(in: .rect(cornerRadius: 28)).padding(.horizontal).padding(.bottom, 6)
+                    }.padding(16).glassEffect(in: .rect(cornerRadius: 24)).padding(.horizontal, 16).padding(.bottom, 6)
                 }
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -366,7 +384,8 @@ struct ParameterEditor: View {
             } else if case .string = value {
                 if isPromptField {
                     PromptInputEditor(text: Binding(get: { value.text }, set: { value = .string($0) }),
-                                      preferenceKey: preferenceKey + "." + field.id)
+                                      preferenceKey: preferenceKey + "." + field.id,
+                                      context: "\(field.nodeTitle) · \(field.key)")
                 } else {
                     TextField(field.key, text: Binding(get: { value.text }, set: { value = .string($0) }), axis: .vertical)
                         .lineLimit(field.priority == 0 ? 4...12 : 1...5)
