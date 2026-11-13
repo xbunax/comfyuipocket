@@ -118,7 +118,7 @@ final class PocketStore {
         savePrompts()
     }
     private func defaultPromptTitle(_ text: String) -> String {
-        let line = text.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? "未命名提示词"
+        let line = text.split(whereSeparator: { $0.isNewline }).first.map { String($0) } ?? "未命名提示词"
         let value = line.trimmingCharacters(in: .whitespaces)
         return value.isEmpty ? "未命名提示词" : String(value.prefix(30))
     }

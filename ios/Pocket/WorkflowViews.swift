@@ -332,7 +332,7 @@ struct ParameterEditor: View {
                 }.pickerStyle(.menu)
             } else if case .string = value {
                 if let mediaKind {
-                    MediaFieldEditor(kind: mediaKind, value: $value)
+                    MediaFieldEditor(value: $value, kind: mediaKind)
                 } else {
                     TextField(field.key, text: Binding(get: { value.text }, set: { value = .string($0) }), axis: .vertical)
                         .lineLimit(field.priority == 0 ? 4...12 : 1...5)
