@@ -82,7 +82,7 @@ jobs:
         with:
           go-version-file: native/go.mod
           cache: false
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: ios-cache
         with:
           path: |
