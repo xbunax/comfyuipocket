@@ -172,6 +172,9 @@ struct PromptStudioView: View {
                     } else {
                         draft = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? incoming : draft + ", " + incoming
                     }
+                }, replace: { incoming in
+                    board = PromptBoardDocument(text: incoming)
+                    draft = incoming
                 })
             }
             .onChange(of: draft) { _, _ in savedVersion = false }

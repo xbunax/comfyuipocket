@@ -13,6 +13,10 @@ ComfyUI Pocket v0.6.2
   randomizes later generations; disabled reuses the configured seeds throughout
   the batch. No confirmation button is needed.
 
+- The saved prompt library now offers Append and Replace current prompt modes.
+  Replacement updates the editor draft and its word blocks together, retaining
+  the saved version's exact text. Apply commits it; Cancel can discard it.
+
 The server plugin remains v0.5.0; no reinstall is required for this update.
 Simulator tests are skipped. The device IPA is compiled directly for user testing.
 Sign ComfyUIPocket-unsigned.ipa before installing. SHA256SUMS.txt checks all assets.

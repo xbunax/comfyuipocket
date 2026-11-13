@@ -11,14 +11,29 @@ struct PromptLibraryView: View {
             }
         }
     }
+    private enum Usage: String, CaseIterable, Identifiable {
+        case append = "追加到末尾"
+        case replace = "替换当前提示词"
+        var id: String { rawValue }
+    }
     @Environment(PocketStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     var insert: ((String) -> Void)? = nil
+    var replace: ((String) -> Void)? = nil
+    @State private var usage: Usage = .append
     @State private var search = ""
     @State private var editor: EditorTarget?
     var body: some View {
         NavigationStack {
             List {
+                if insert != nil && replace != nil {
+                    Section {
+                        Picker("使用方式", selection: $usage) {
+                            ForEach(Usage.allCases) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                            .accessibilityIdentifier("promptLibraryUsage")
+                    }
+                }
                 if filtered.isEmpty {
                     Section {
                         VStack(spacing: 8) {
@@ -26,7 +41,7 @@ struct PromptLibraryView: View {
                             Text(store.prompts.isEmpty ? "还没有保存的提示词。" : "没有匹配的提示词。")
                                 .foregroundStyle(.secondary)
                             if store.prompts.isEmpty {
-                                Text("在提示词输入框下点“保存提示词”，或点右上角新建。")
+                                Text("在提示词编辑页点“保存新版本”，或点右上角新建。")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }.frame(maxWidth: .infinity).padding(.vertical, 24)
@@ -36,8 +51,8 @@ struct PromptLibraryView: View {
                     row(prompt)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            if let insert {
-                                insert(prompt.text)
+                            if let action = selectedAction {
+                                action(prompt.text)
                                 dismiss()
                             } else {
                                 editor = .edit(prompt)
@@ -49,6 +64,7 @@ struct PromptLibraryView: View {
                         }
                 }
             }
+            .pocketListSurface()
             .searchable(text: $search, prompt: "搜索标题或内容")
             .navigationTitle("提示词库")
             .toolbar {
@@ -63,6 +79,10 @@ struct PromptLibraryView: View {
             }
         }
     }
+    private var selectedAction: ((String) -> Void)? {
+        usage == .replace ? (replace ?? insert) : (insert ?? replace)
+    }
+    private var replacing: Bool { replace != nil && (usage == .replace || insert == nil) }
     private var filtered: [SavedPrompt] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return store.prompts }
@@ -74,9 +94,10 @@ struct PromptLibraryView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(prompt.title).font(.headline)
             Text(prompt.text).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-            if insert != nil {
-                Label("点按插入", systemImage: "arrow.down.to.line.compact")
-                    .font(.caption2).foregroundStyle(.mint)
+            if selectedAction != nil {
+                Label(replacing ? "点按替换当前提示词" : "点按追加到末尾",
+                      systemImage: replacing ? "arrow.triangle.2.circlepath" : "text.append")
+                    .font(.caption2).foregroundStyle(PocketPalette.accent)
             }
         }.padding(.vertical, 4)
     }
