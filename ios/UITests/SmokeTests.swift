@@ -29,6 +29,11 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(toggle.exists)
         if toggle.value as? String == "0" { toggle.tap() }
         XCTAssertTrue(app.staticTexts["权重 1.20"].exists)
+        toggle.tap()
+        app.swipeUp()
+        XCTAssertTrue(app.buttons["inputMediaPreview"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["本地文件"].exists)
+        XCTAssertTrue(app.buttons["服务器文件"].exists)
     }
     @MainActor func testBatchAppearsOnceAndRetainsEachGenerationParameters() {
         let app = XCUIApplication()

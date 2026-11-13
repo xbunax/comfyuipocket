@@ -4,8 +4,18 @@ import AVKit
 import QuickLook
 import QuickLookThumbnailing
 import UniformTypeIdentifiers
+import ImageIO
 
 @MainActor enum MediaThumbnail {
+    static func image(_ data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 1200
+              ] as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
+    }
     static func video(_ url: URL) async -> UIImage? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         generator.appliesPreferredTrackTransform = true
@@ -114,7 +124,7 @@ struct MediaFieldEditor: View {
         var payload = data; var name = filename; var contentType = mime
         if kind == .image {
             guard let image = UIImage(data: data), let png = image.pngData() else { throw PocketError.message("无法读取图片。") }
-            pendingThumbnail = image; payload = png; name = "pocket-\(UUID().uuidString).png"; contentType = "image/png"
+            pendingThumbnail = MediaThumbnail.image(data); payload = png; name = "pocket-\(UUID().uuidString).png"; contentType = "image/png"
         } else {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(URL(fileURLWithPath: filename).lastPathComponent)")
             try data.write(to: url)
@@ -160,6 +170,7 @@ struct InputMediaPreview: View {
                 }
             }.frame(height: 180)
         }.buttonStyle(.plain)
+        .accessibilityIdentifier("inputMediaPreview")
         .task(id: identity) { await load() }
         .quickLookPreview($quickLookURL)
         .sheet(isPresented: $showFull) {
@@ -186,7 +197,7 @@ struct InputMediaPreview: View {
                 decoded = await MediaThumbnail.video(api.inputMediaURL(value))
             } else {
                 let data = try await api.inputMedia(value)
-                if kind == .image { decoded = UIImage(data: data) }
+                if kind == .image { decoded = MediaThumbnail.image(data) }
                 else {
                     let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(MediaFile.split(value).filename)")
                     try data.write(to: file)

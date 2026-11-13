@@ -80,6 +80,9 @@ final class PocketStore {
         ]
         let canvas = try! JSONDecoder().decode(JSONValue.self, from: Data(#"{"nodes":[{"id":1,"type":"CLIPTextEncode","pos":[-120,80],"size":[300,180],"inputs":[],"outputs":[{"name":"CONDITIONING"}],"widgets_values":["portrait"]},{"id":2,"type":"LoadImage","pos":[260,160],"size":[280,200],"inputs":[{"name":"image"}],"widgets_values":[]}],"links":[[1,1,0,2,0,"IMAGE"]],"groups":[]}"#.utf8))
         workflows = [Workflow(id: id, name: "UI Canvas Workflow", prompt: prompt, canvas: canvas)]
+        nodeInfo = .object(["LoadImage": .object(["input": .object(["required": .object([
+            "image": .array([.array([.string("sample.png")]), .object(["image_upload": .bool(true)])])
+        ])])])])
         client = ComfyClient(baseURL: URL(string: "http://127.0.0.1:8188")!)
         generationTasks = [GenerationTask(id: "ui-batch", server: client!.baseURL.absoluteString, workflowID: id,
             name: "UI Canvas Workflow", createdAt: 1, requestedCount: 2,
@@ -278,7 +281,7 @@ final class PocketStore {
                 guard !promptID.isEmpty else { throw PocketError.message("提交失败：\(reply)") }
                 recordPrompt(promptID, workflowID: workflow.id)
                 if let taskIndex = generationTasks.firstIndex(where: { $0.id == taskID }) {
-                    generationTasks[taskIndex].items.append(GenerationItem(id: promptID, prompt: submitted.prompt))
+                    generationTasks[taskIndex].items.append(GenerationItem(id: promptID, prompt: submitted.prompt, sequence: index))
                 }
                 saveGenerationTasks()
                 queued += 1
@@ -317,7 +320,7 @@ final class PocketStore {
         catch { self.error = error.localizedDescription }
     }
     func cancelPending(in task: GenerationTask) async {
-        guard let api = client, task.server == api.baseURL.absoluteString else { return }
+        guard let api = client, !task.submitting, task.server == api.baseURL.absoluteString else { return }
         let ids = task.items.map(\.id).filter { isPending($0) }
         guard !ids.isEmpty else { return }
         do {
@@ -346,7 +349,9 @@ final class PocketStore {
                 index = generationTasks.count - 1; changed = true
             }
             guard let index, !generationTasks[index].items.contains(where: { $0.id == promptID }) else { continue }
-            generationTasks[index].items.append(GenerationItem(id: promptID, prompt: row.array[2].object))
+            generationTasks[index].items.append(GenerationItem(id: promptID, prompt: row.array[2].object,
+                sequence: Int(meta["index"].double)))
+            generationTasks[index].items.sort { ($0.sequence ?? 0) < ($1.sequence ?? 0) }
             changed = true
         }
         if changed { saveGenerationTasks() }

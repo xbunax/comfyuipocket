@@ -75,7 +75,7 @@ struct QueueView: View {
                 }
             }.padding(.vertical, 4)
         }.swipeActions {
-            if summary.pending > 0 {
+            if summary.pending > 0 && !task.submitting {
                 Button("取消待执行项", role: .destructive) { Task { await store.cancelPending(in: task) } }
             }
         }
@@ -129,7 +129,7 @@ struct GenerationTaskDetailView: View {
                     }
                     Section("各次生成 · 提示词与实际参数") {
                         ForEach(Array(task.items.enumerated()), id: \.element.id) { index, item in
-                            NavigationLink { TaskDetailView(promptID: item.id, snapshot: item.prompt) } label: {
+                            NavigationLink { TaskDetailView(promptID: item.id, snapshot: item.prompt, cancelled: item.cancelled) } label: {
                                 HStack {
                                     Text("第 \(index + 1) 次生成")
                                     Spacer()
@@ -138,7 +138,7 @@ struct GenerationTaskDetailView: View {
                             }
                         }
                     }
-                    if summary.pending > 0 {
+                    if summary.pending > 0 && !task.submitting {
                         Section { Button("取消本任务全部待执行项", role: .destructive) { Task { await store.cancelPending(in: task) } } }
                     }
                 }.navigationTitle(task.requestedCount > 1 ? "批量任务详情" : "任务详情")
@@ -165,6 +165,7 @@ struct TaskDetailView: View {
     @Environment(PocketStore.self) private var store
     let promptID: String
     var snapshot: [String: JSONValue]? = nil
+    var cancelled = false
     @State private var selectedOutput: OutputImage?
 
     private var entry: JSONValue? {
@@ -218,6 +219,7 @@ struct TaskDetailView: View {
         }
         if store.isRunning(promptID) { return "正在执行" }
         if store.isPending(promptID) { return "等待执行" }
+        if cancelled { return "已取消" }
         return "任务记录不可用"
     }
     var body: some View {
@@ -344,7 +346,7 @@ struct RemoteImage: View {
                     guard !Task.isCancelled else { return }
                     image = decoded; failed = image == nil; return
                 }
-                guard let data = try await store.client?.image(output), let decoded = UIImage(data: data) else { failed = true; return }
+                guard let data = try await store.client?.image(output), let decoded = MediaThumbnail.image(data) else { failed = true; return }
                 guard !Task.isCancelled else { return }
                 image = decoded
             } catch { if !Task.isCancelled { failed = true } }

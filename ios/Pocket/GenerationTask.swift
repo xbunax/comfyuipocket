@@ -4,6 +4,7 @@ struct GenerationItem: Codable, Identifiable, Equatable {
     var id: String
     var prompt: [String: JSONValue]
     var cancelled = false
+    var sequence: Int? = nil
 }
 
 struct GenerationTask: Codable, Identifiable, Equatable {
