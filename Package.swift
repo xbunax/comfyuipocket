@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ComfyUIPocketCore",
-    platforms: [.macOS(.v14), .iOS(.v26)],
+    platforms: [.macOS(.v14), .iOS("26.0")],
     products: [.library(name: "ComfyUIPocketCore", targets: ["ComfyUIPocketCore"])],
     targets: [
         .target(name: "ComfyUIPocketCore", path: "ios/Pocket",
