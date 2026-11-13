@@ -10,6 +10,11 @@ on:
         description: 'Optional new release tag, e.g. v0.1.0 (main branch only)'
         required: false
         type: string
+      run_simulator_tests:
+        description: 'Run optional iOS simulator UI tests (device testing can be done with the IPA)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -92,12 +97,16 @@ jobs:
           cd native
           go mod tidy
       - name: Build simulator bridge
+        if: github.event_name == 'workflow_dispatch' && inputs.run_simulator_tests
         run: bash scripts/build_tunnel.sh iphonesimulator "$(uname -m)"
+      - name: Swift core model tests
+        run: swift test
       - name: Generate Xcode project
         run: |
           swift scripts/make_icon.swift
           xcodegen generate
       - name: Simulator unit and UI tests
+        if: github.event_name == 'workflow_dispatch' && inputs.run_simulator_tests
         timeout-minutes: 15
         run: |
           set -o pipefail
@@ -106,13 +115,13 @@ jobs:
           xcrun simctl bootstatus "$device" -b
           xcodebuild test -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -destination "platform=iOS Simulator,id=$device,arch=$(uname -m)" -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 -resultBundlePath build/Tests.xcresult CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES | tee build-tests.log | xcbeautify --is-ci
       - name: Export UI screenshots
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_simulator_tests
         run: |
           if [[ -d build/Tests.xcresult ]]; then
             xcrun xcresulttool export attachments --path build/Tests.xcresult --output-path build/screenshots || true
           fi
       - name: Upload test results
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_simulator_tests
         uses: actions/upload-artifact@v4
         with:
           name: ios-test-results

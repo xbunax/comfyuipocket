@@ -10,7 +10,7 @@
 - 节点依赖列表；保持原始节点连接与自定义结构化输入，不猜测画布 widget 到 API 的映射。
 - 提交任务、WebSocket 进度和预览、自动重连、队列取消、停止确认、最近任务和图片作品保存/分享。
 - ComfyUI Pocket 插件：使用 ComfyUI 自己的 `graphToPrompt()` 导出，在本机用户目录保存，不上传到外部服务。
-- Actions 的 Python/Go/Swift 测试、iOS 模拟器 UI 冒烟测试、IPA 和插件 ZIP 发布。
+- Actions 的 Python/Go/Swift 核心测试、可选 iOS 模拟器 UI 冒烟测试、IPA 和插件 ZIP 发布。
 
 ## 安装和连接
 
@@ -47,7 +47,7 @@
 
 可选 Actions variables：`IOS_BUNDLE_ID`（默认 `com.xbunax.comfyuipocket`）、`IOS_SIGNING_IDENTITY`（默认 `Apple Distribution`）、`IOS_EXPORT_METHOD`（默认 `release-testing`，适用于注册设备分发）。证书、App ID、描述文件和导出方式必须匹配。不要将这些材料提交到仓库。
 
-Release 同时包含插件 ZIP 和 SHA256 校验文件。构建失败不会发布不完整 Release。模拟器测试结果与截图保存在 `ios-test-results` artifact 的 `Tests.xcresult` 中。
+Release 同时包含插件 ZIP 和 SHA256 校验文件。构建失败不会发布不完整 Release。默认构建 IPA，由用户在真机验收；手动运行 workflow 时勾选 `run_simulator_tests` 可执行模拟器 UI 测试，结果与截图保存在 `ios-test-results` artifact 中。
 
 ## 开发
 

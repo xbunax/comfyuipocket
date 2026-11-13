@@ -1,5 +1,9 @@
 import XCTest
+#if canImport(ComfyUIPocketCore)
+@testable import ComfyUIPocketCore
+#else
 @testable import ComfyUIPocket
+#endif
 
 final class ModelTests: XCTestCase {
     func testIPv4AndIPv6Pairing() throws {
