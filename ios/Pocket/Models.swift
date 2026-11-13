@@ -115,7 +115,8 @@ struct Workflow: Codable, Identifiable, Equatable {
         for nodeID in Array(prompt.keys) {
             guard var node = prompt[nodeID]?.object, var inputs = node["inputs"]?.object else { continue }
             var changed = false
-            for (key, value) in inputs where key.lowercased().contains("seed") {
+            for key in Array(inputs.keys) where key.lowercased().contains("seed") {
+                guard let value = inputs[key] else { continue }
                 switch value {
                 case .integer:
                     inputs[key] = .integer(Int64.random(in: 0...Int64(UInt32.max)))

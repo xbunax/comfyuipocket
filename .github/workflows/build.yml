@@ -55,7 +55,18 @@ jobs:
           key: swift-${{ runner.os }}-${{ hashFiles('Package.swift', 'ios/Pocket/*.swift', 'ios/Tests/*.swift') }}
           restore-keys: swift-${{ runner.os }}-
       - name: Swift core model tests
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee swift-test.log
+      - name: Report Swift test failure
+        if: failure()
+        run: |
+          if [[ -f swift-test.log ]]; then
+            grep -E 'error:|failed|FAILED' swift-test.log | head -n 10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            tail -n 30 swift-test.log
+          fi
       - name: Generate Xcode project
         run: |
           brew install xcodegen
@@ -110,6 +121,15 @@ jobs:
           cp -R build/Pocket.xcarchive/Products/Applications/ComfyUIPocket.app dist/Payload/
           cd dist
           zip -qry ComfyUIPocket-unsigned.ipa Payload
+      - name: Report archive failure
+        if: failure()
+        run: |
+          if [[ -f build-device.log ]]; then
+            grep -E 'error:|failed|FAILED' build-device.log | head -n 10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            tail -n 30 build-device.log
+          fi
       - name: Import signing material
         if: steps.signing.outputs.enabled == 'true'
         env:
@@ -131,6 +151,15 @@ jobs:
           xcodebuild -exportArchive -archivePath build/Pocket.xcarchive -exportPath build/export -exportOptionsPlist "$RUNNER_TEMP/pocket-signing/ExportOptions.plist"
           mkdir -p dist
           cp build/export/*.ipa dist/ComfyUIPocket-signed.ipa
+      - name: Report signed archive failure
+        if: failure()
+        run: |
+          if [[ -f build-device.log ]]; then
+            grep -E 'error:|failed|FAILED' build-device.log | head -n 10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            tail -n 30 build-device.log
+          fi
       - name: Clean signing material
         if: always()
         run: |

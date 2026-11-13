@@ -195,39 +195,6 @@ struct WorkflowEditor: View {
                         Text("提示词和常用参数优先展示。点击图钉收藏；在“排列”中拖动调整顺序。")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if store.isActivePrompt(for: id) || !outputs.isEmpty {
-                        Section("生成结果") {
-                            if store.isActivePrompt(for: id), let data = store.preview, let image = UIImage(data: data) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("实时预览").font(.caption).foregroundStyle(.secondary)
-                                    Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
-                                }.padding(.vertical, 4)
-                            }
-                            if outputs.isEmpty {
-                                Text(store.isActivePrompt(for: id) ? "正在生成，完成后会显示在这里。" : "暂无生成结果。")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            } else {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 12) {
-                                        ForEach(outputs) { output in
-                                            Button { selectedOutput = output } label: {
-                                                VStack(alignment: .leading, spacing: 6) {
-                                                    RemoteImage(output: output)
-                                                        .frame(width: 150, height: 170)
-                                                        .clipped()
-                                                        .clipShape(.rect(cornerRadius: 16))
-                                                    Text(output.filename)
-                                                        .font(.caption2).lineLimit(1)
-                                                        .frame(width: 150, alignment: .leading)
-                                                }
-                                            }.buttonStyle(.plain)
-                                        }
-                                    }.padding(.vertical, 4)
-                                }
-                                .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
-                            }
-                        }
-                    }
                     if arranging {
                         Section("拖动调整参数顺序") {
                             ForEach(workflow.fields) { field in
@@ -254,6 +221,39 @@ struct WorkflowEditor: View {
                                         store.save(); store.touch(id)
                                     } label: { Image(systemName: workflow.pinned.contains(field.id) ? "pin.fill" : "pin") }
                                         .accessibilityLabel("收藏参数 \(field.key)")
+                                }
+                            }
+                        }
+                        if !store.recentPromptIDs(for: id).isEmpty || !outputs.isEmpty {
+                            Section("生成结果") {
+                                if store.isActivePrompt(for: id), let data = store.preview, let image = UIImage(data: data) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("实时预览").font(.caption).foregroundStyle(.secondary)
+                                        Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
+                                    }.padding(.vertical, 4)
+                                }
+                                if outputs.isEmpty {
+                                    Text(store.hasQueuedPrompt(for: id) ? "正在生成，完成后会显示在这里。" : "暂无生成结果。")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 12) {
+                                            ForEach(outputs) { output in
+                                                Button { selectedOutput = output } label: {
+                                                    VStack(alignment: .leading, spacing: 6) {
+                                                        RemoteImage(output: output)
+                                                            .frame(width: 150, height: 170)
+                                                            .clipped()
+                                                            .clipShape(.rect(cornerRadius: 16))
+                                                        Text(output.filename)
+                                                            .font(.caption2).lineLimit(1)
+                                                            .frame(width: 150, alignment: .leading)
+                                                    }
+                                                }.buttonStyle(.plain)
+                                            }
+                                        }.padding(.vertical, 4)
+                                    }
+                                    .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
                                 }
                             }
                         }
@@ -469,6 +469,7 @@ struct InputMediaPreview: View {
     let kind: MediaKind
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var loading = false
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16).fill(Color.secondary.opacity(0.08))
@@ -481,8 +482,10 @@ struct InputMediaPreview: View {
                 Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
             } else if kind == .video {
                 VStack(spacing: 6) {
-                    Image(systemName: "play.rectangle.fill").font(.largeTitle).foregroundStyle(.mint)
-                    Text("视频已选择").font(.caption).foregroundStyle(.secondary)
+                    if loading { ProgressView() }
+                    else { Image(systemName: "play.rectangle.fill").font(.largeTitle).foregroundStyle(.mint) }
+                    Text(loading ? "正在加载预览…" : (failed ? "视频预览不可用" : "点按加载视频预览"))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             } else if failed {
                 VStack(spacing: 6) {
@@ -494,15 +497,24 @@ struct InputMediaPreview: View {
             }
         }
         .frame(height: 170)
-        .task(id: value) { await load() }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard kind == .video, !value.isEmpty, image == nil, !loading else { return }
+            Task { await load() }
+        }
+        .task(id: value) {
+            if kind == .image { await load() }
+        }
     }
     private func load() async {
-        image = nil; failed = false
+        image = nil; failed = false; loading = true
+        defer { loading = false }
         guard !value.isEmpty, let api = store.client else { return }
         do {
             let data = try await api.inputMedia(value)
             if kind == .video {
                 image = await videoThumbnail(data)
+                if image == nil { failed = true }
             } else if let decoded = UIImage(data: data) {
                 image = decoded
             } else {

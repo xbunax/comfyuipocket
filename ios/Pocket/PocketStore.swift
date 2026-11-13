@@ -393,6 +393,13 @@ final class PocketStore {
         guard !activePrompt.isEmpty else { return false }
         return (recentPrompts[workflowID] ?? []).contains(activePrompt)
     }
+    func hasQueuedPrompt(for workflowID: String) -> Bool {
+        let ids = Set(recentPrompts[workflowID] ?? [])
+        guard !ids.isEmpty else { return false }
+        return (queue["queue_running"].array + queue["queue_pending"].array).contains { item in
+            item.array.count > 1 && ids.contains(item.array[1].text)
+        }
+    }
     func images(forWorkflow workflowID: String) -> [OutputImage] {
         var result: [OutputImage] = []
         var seen = Set<String>()
