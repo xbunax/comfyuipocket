@@ -22,13 +22,18 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(visual.waitForExistence(timeout: 5))
         visual.tap()
         XCTAssertTrue(app.navigationBars["提示词可视化编辑"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["权重 1.20"].exists)
+        let word = app.buttons["promptChip.soft light"]
+        XCTAssertTrue(word.exists)
+        word.tap()
+        XCTAssertTrue(app.navigationBars["词块详细设置"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["翻译"].exists)
+        app.buttons["取消"].tap()
         let studio = XCTAttachment(screenshot: app.screenshot()); studio.name = "04-PromptStudio"; studio.lifetime = .keepAlways; add(studio)
         app.buttons["取消"].tap()
         let toggle = app.switches["promptBlockEditing"]
         XCTAssertTrue(toggle.exists)
         if toggle.value as? String == "0" { toggle.tap() }
-        XCTAssertTrue(app.staticTexts["权重 1.20"].exists)
+        XCTAssertTrue(app.buttons["promptChip.soft light"].exists)
         toggle.tap()
         app.swipeUp()
         XCTAssertTrue(app.buttons["inputMediaPreview"].waitForExistence(timeout: 5))

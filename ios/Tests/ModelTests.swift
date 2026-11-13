@@ -6,6 +6,41 @@ import XCTest
 #endif
 
 final class ModelTests: XCTestCase {
+    func testPromptBoardDragOrderAndMovingAcrossCategories() {
+        var board = PromptBoardDocument(text: "one, two, (three:1.20)")
+        let one = board.blocks[0].id; let two = board.blocks[1].id; let three = board.blocks[2].id
+        board.move(one, to: "uncategorized", over: three)
+        XCTAssertEqual(board.rendered, "two, (three:1.20), one")
+        board.move(one, to: "uncategorized", over: two)
+        XCTAssertEqual(board.rendered, "one, two, (three:1.20)")
+        board.categories.append(PromptCategory(id: "style", name: "风格"))
+        board.move(two, to: "style")
+        XCTAssertEqual(board.rendered, "one, (three:1.20), two")
+        XCTAssertEqual(board.blocks.first(where: { $0.id == two })?.categoryID, "style")
+        board.removeCategory("style")
+        XCTAssertEqual(board.blocks.count, 3)
+        XCTAssertTrue(board.blocks.allSatisfy { $0.categoryID == "uncategorized" })
+    }
+    func testPromptBoardRoundTripKeepsDisabledWordsAndOriginalWeights() throws {
+        var board = PromptBoardDocument(text: "portrait, (soft light:1.200), <lora:style:0.8>")
+        board.blocks[0].enabled = false
+        board.categories[0].collapsed = true
+        let restored = try JSONDecoder().decode(PromptBoardDocument.self, from: JSONEncoder().encode(board))
+        XCTAssertEqual(restored, board)
+        XCTAssertEqual(restored.rendered, "(soft light:1.200), <lora:style:0.8>")
+        XCTAssertEqual(restored.blocks[1].weight, 1.2)
+    }
+    func testPromptBoardExternalEditsKeepMatchingWordsAndRespectNewOrder() {
+        var board = PromptBoardDocument(text: "one, two, three")
+        board.categories.append(PromptCategory(id: "style", name: "风格"))
+        let two = board.blocks[1].id
+        board.move(two, to: "style")
+        board.blocks[0].enabled = false
+        board.synchronize("three, two, four")
+        XCTAssertEqual(board.rendered, "three, two, four")
+        XCTAssertEqual(board.blocks.first(where: { $0.id == two })?.categoryID, "uncategorized")
+        XCTAssertEqual(board.blocks.filter { !$0.enabled }.map(\.text), ["one"])
+    }
     func testCanvasSurvivesImportEditingAndExport() throws {
         let json = #"{"id":"canvas","name":"Layout","prompt":{"1":{"class_type":"Text","inputs":{"text":"hello"}}},"workflow":{"nodes":[{"id":1,"pos":[-200,300],"size":[320,140]}],"links":[],"definitions":{"subgraphs":[]}}}"#
         var workflow = try Workflow.load(Data(json.utf8), name: "Canvas")
