@@ -78,7 +78,7 @@ final class ModelTests: XCTestCase {
         XCTAssertFalse(profile.https)
     }
     func testBatchSeedRandomizationPreservesOtherValuesAndTypes() throws {
-        let json = #"{"1":{"class_type":"KSampler","inputs":{"seed":1,"steps":20,"noise_seed":9007199254740993,"text":"seed"}}}"#
+        let json = #"{"1":{"class_type":"KSampler","inputs":{"seed":1,"steps":20,"noise_seed":18446744073709551615,"text":"seed"}}}"#
         var workflow = try Workflow.load(Data(json.utf8), name: "Seeds")
         workflow.randomizeSeeds()
         if case .integer(let seed) = workflow.prompt["1"]?["inputs"]["seed"] ?? .null {

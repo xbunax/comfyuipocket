@@ -95,6 +95,15 @@ struct TaskDetailView: View {
         guard let entry else { return [] }
         return OutputImage.fromHistoryEntry(entry, promptID: promptID)
     }
+    private var errorMessage: String? {
+        guard let entry else { return nil }
+        for message in entry["status"]["messages"].array {
+            if message.array.count > 1, message.array[0].text == "execution_error" {
+                return message.array[1]["exception_message"].text.nonEmpty
+            }
+        }
+        return nil
+    }
     private var statusText: String {
         if let entry {
             let status = entry["status"]["status_str"].text
@@ -121,6 +130,11 @@ struct TaskDetailView: View {
             if store.isRunning(promptID), let preview = store.preview, let image = UIImage(data: preview) {
                 Section("实时预览") {
                     Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
+                }
+            }
+            if let errorMessage {
+                Section("错误信息") {
+                    Text(errorMessage).font(.caption.monospaced()).textSelection(.enabled)
                 }
             }
             if !outputs.isEmpty {
