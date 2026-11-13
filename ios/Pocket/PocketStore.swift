@@ -21,6 +21,7 @@ final class PocketStore {
     var syncStatus = "等待连接"
     var syncing = false
     var busy = false
+    var canvasEditingID: String?
     var prompts: [SavedPrompt] = []
     var pinnedWorkflows: [String] = []
     var generationTasks: [GenerationTask] = []
@@ -280,6 +281,7 @@ final class PocketStore {
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
         guard let api = client, !busy else { return }
+        guard !workflow.prompt.isEmpty else { error = "画布中还没有可执行节点，请先添加并连接节点。"; return }
         busy = true; defer { busy = false }
         let total = max(1, min(count, 20))
         let taskID = UUID().uuidString
@@ -386,6 +388,13 @@ final class PocketStore {
         }
         if changed { saveGenerationTasks() }
     }
+    func applyCanvasDocument(_ document: CanvasDocument, to id: String) throws {
+        guard let index = workflows.firstIndex(where: { $0.id == id }) else { throw PocketError.message("工作流已被删除。") }
+        let updated = try document.applying(to: workflows[index])
+        guard updated != workflows[index] else { return }
+        workflows[index] = updated
+        save(); touch(id)
+    }
     func touch(_ id: String) {
         var record = syncRecords[id] ?? SyncRecord()
         record.dirty = true
@@ -434,6 +443,7 @@ final class PocketStore {
                 let id = item["id"].text
                 guard id.count == 32, !pendingDeletes.contains(id) else { continue }
                 serverIDs.insert(id)
+                if id == canvasEditingID { continue }
                 let remoteUpdated = item["updatedAt"].double
                 if let record = syncRecords[id], record.dirty {
                     continue
@@ -456,6 +466,7 @@ final class PocketStore {
                 changed = true
             }
             for id in WorkflowSync.idsToRemove(records: syncRecords, serverIDs: serverIDs, pendingDeletes: pendingDeletes) {
+                if id == canvasEditingID { continue }
                 workflows.removeAll { $0.id == id }
                 syncRecords.removeValue(forKey: id)
                 changed = true
@@ -501,11 +512,14 @@ final class PocketStore {
                 syncRecords.removeValue(forKey: id)
             }
             let workflow = workflows[index]
-            let reply = try await api.json("pocket/v1/workflows", method: "POST", body: .object([
+            var payload: [String: JSONValue] = [
                 "id": .string(targetID), "name": .string(workflow.name), "prompt": .object(workflow.prompt)
-            ]))
+            ]
+            if let canvas = workflow.canvas { payload["workflow"] = canvas }
+            let reply = try await api.json("pocket/v1/workflows", method: "POST", body: .object(payload))
             guard client === api else { return }
-            syncRecords[targetID] = SyncRecord(serverUpdatedAt: reply["updatedAt"].double, dirty: false)
+            guard let current = workflows.first(where: { $0.id == targetID }) else { continue }
+            syncRecords[targetID] = SyncRecord(serverUpdatedAt: reply["updatedAt"].double, dirty: current != workflow)
         }
     }
     private func recordSyncError(_ error: Error) {

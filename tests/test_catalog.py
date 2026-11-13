@@ -41,6 +41,14 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(stored["name"], "Phone")
         self.assertEqual(stored["workflow"], {"nodes": [{"id": 1}]})
 
+    def test_canvas_editor_updates_layout_and_allows_empty_drafts(self):
+        first = self.store.save({"name": "Canvas", "prompt": PROMPT, "workflow": {"nodes": [{"id": 1}]}})
+        canvas = {"nodes": [], "links": [], "definitions": {"subgraphs": []}}
+        self.store.save({"id": first["id"], "name": "Canvas", "prompt": {}, "workflow": canvas})
+        stored = self.store.get(first["id"])
+        self.assertEqual(stored["prompt"], {})
+        self.assertEqual(stored["workflow"], canvas)
+
     def test_legacy_entry_gets_file_timestamp(self):
         key = "a" * 32
         pathlib.Path(self.temp.name, f"{key}.json").write_text(

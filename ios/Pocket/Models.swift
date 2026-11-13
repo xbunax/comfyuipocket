@@ -85,7 +85,9 @@ struct Workflow: Codable, Identifiable, Equatable {
         let json = try JSONDecoder().decode(JSONValue.self, from: data)
         let root = json.object
         let prompt = root["prompt"]?.object ?? root
-        guard !prompt.isEmpty, prompt.values.allSatisfy({ node in
+        let hasCanvas: Bool
+        if let canvas = root["workflow"], case .array = canvas["nodes"] { hasCanvas = true } else { hasCanvas = false }
+        guard (!prompt.isEmpty || hasCanvas), prompt.values.allSatisfy({ node in
             guard case .string(let name) = node["class_type"], !name.isEmpty,
                   case .object = node["inputs"] else { return false }
             return true

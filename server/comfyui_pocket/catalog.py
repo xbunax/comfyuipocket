@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 MAX_BYTES = 20 * 1024 * 1024
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
@@ -15,8 +15,8 @@ def now_millis():
     return int(time.time() * 1000)
 
 
-def validate_prompt(prompt):
-    if not isinstance(prompt, dict) or not prompt:
+def validate_prompt(prompt, allow_empty=False):
+    if not isinstance(prompt, dict) or (not prompt and not allow_empty):
         raise ValueError("prompt must be a non-empty ComfyUI API graph")
     for node_id, node in prompt.items():
         if not isinstance(node_id, str) or not isinstance(node, dict):
@@ -60,7 +60,8 @@ class Catalog:
             value = json.load(stream)
         if not isinstance(value, dict):
             raise ValueError("invalid workflow")
-        validate_prompt(value.get("prompt"))
+        canvas = value.get("workflow")
+        validate_prompt(value.get("prompt"), allow_empty=isinstance(canvas, dict) and isinstance(canvas.get("nodes"), list))
         if not isinstance(value.get("updatedAt"), int) or isinstance(value.get("updatedAt"), bool):
             # Catalogs written before automatic sync fall back to the file timestamp.
             value["updatedAt"] = int(path.stat().st_mtime * 1000)
@@ -80,7 +81,9 @@ class Catalog:
                 existing = self.get(workflow_id)
             except (ValueError, OSError):
                 existing = None
-        value = {"id": workflow_id, "name": name.strip(), "prompt": validate_prompt(data.get("prompt"))}
+        canvas = data.get("workflow", existing.get("workflow") if isinstance(existing, dict) else None)
+        value = {"id": workflow_id, "name": name.strip(), "prompt": validate_prompt(data.get("prompt"),
+            allow_empty=isinstance(canvas, dict) and isinstance(canvas.get("nodes"), list))}
         if "workflow" in data:
             value["workflow"] = data["workflow"]
         elif isinstance(existing, dict) and "workflow" in existing:

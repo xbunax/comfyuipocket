@@ -315,7 +315,7 @@ struct WorkflowEditor: View {
                     }
                 }
                 .sheet(isPresented: $showGraph) { GraphView(workflow: workflow) }
-                .sheet(isPresented: $showCanvas) { WorkflowCanvasView(workflow: workflow) }
+                .fullScreenCover(isPresented: $showCanvas) { WorkflowCanvasView(workflowID: id) }
                 .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount, randomizeSeeds: $randomizeBatchSeeds) }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: workflow.name) { result in
                     if case .failure(let error) = result { store.error = error.localizedDescription }

@@ -33,6 +33,10 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install 'aiohttp>=3.12,<4' pyyaml
       - run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test tests/canvas_bridge.test.cjs
       - run: python scripts/package_plugin.py
       - uses: actions/upload-artifact@v4
         with:

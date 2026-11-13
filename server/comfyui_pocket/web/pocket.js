@@ -272,6 +272,9 @@ app.registerExtension({
       id: "comfyui-pocket", icon: "pi pi-mobile", title: "Pocket",
       tooltip: "ComfyUI Pocket · 全部工作流自动同步", type: "custom", render: panel
     });
+    // The embedded editor owns a live unsaved graph. Desktop catalog scanning
+    // must not overwrite its snapshots or perform unrelated conversions.
+    if (window.__POCKET_CANVAS__ || new URLSearchParams(location.search).get("pocket_canvas") === "1") return;
     setTimeout(() => syncAll(false), 1200);
     setInterval(() => syncAll(false), POLL_MS);
   }
