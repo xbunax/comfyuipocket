@@ -30,6 +30,54 @@ final class ModelTests: XCTestCase {
         XCTAssertNil(resolution.values(for: ResolutionPreset(width: 768, height: 1024), schema: choices))
         XCTAssertNotNil(resolution.values(for: ResolutionPreset(width: 1024, height: 512), schema: choices))
     }
+    func testPromptFunctionsRecognizeCommonEnglishAndChineseWithoutPartialWordMatches() {
+        XCTAssertEqual(PromptWordFunction.recognize("soft diffused window lighting"), .lighting)
+        XCTAssertEqual(PromptWordFunction.recognize("50mm lens"), .camera)
+        XCTAssertEqual(PromptWordFunction.recognize("f/1.8"), .camera)
+        XCTAssertEqual(PromptWordFunction.recognize("warm filmic color grading"), .color)
+        XCTAssertEqual(PromptWordFunction.recognize("cinematic film-still composition"), .composition)
+        XCTAssertEqual(PromptWordFunction.recognize("ultra-realistic"), .style)
+        XCTAssertEqual(PromptWordFunction.recognize("8K"), .quality)
+        XCTAssertEqual(PromptWordFunction.recognize("single woman"), .subject)
+        XCTAssertEqual(PromptWordFunction.recognize("<lora:portrait:0.8>"), .style)
+        XCTAssertEqual(PromptWordFunction.recognize("柔光照亮人物"), .lighting)
+        XCTAssertEqual(PromptWordFunction.recognize("不要水印"), .negative)
+        XCTAssertEqual(PromptWordFunction.recognize("humanitarian"), .other)
+        XCTAssertEqual(PromptWordFunction.recognize("supernatural"), .other)
+        XCTAssertEqual(PromptWordFunction.recognize("unfamiliar creative phrase"), .other)
+    }
+    func testPromptFunctionOverridesRoundTripAndLegacyBlocksStillDecode() throws {
+        let block = PromptBlock(text: "soft light", weight: 1.25)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(block)) as? [String: Any])
+        legacy.removeValue(forKey: "functionOverride")
+        var restored = try JSONDecoder().decode(PromptBlock.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(restored.functionOverride); XCTAssertEqual(restored.function, .lighting)
+        let rendered = restored.rendered
+        restored.functionOverride = .style
+        XCTAssertEqual(restored.rendered, rendered)
+        restored = try JSONDecoder().decode(PromptBlock.self, from: JSONEncoder().encode(restored))
+        XCTAssertEqual(restored.function, .style)
+        restored.functionOverride = nil; restored.text = "50mm lens"
+        XCTAssertEqual(restored.function, .camera)
+    }
+    func testFunctionFilteringKeepsHiddenWordsAndDraggingRetainsMetadata() {
+        var board = PromptBoardDocument(text: "soft light, a woman, 50mm lens, (rim light:1.20)")
+        let original = board
+        let lights = board.words(matching: .lighting)
+        XCTAssertEqual(lights.count, 2)
+        XCTAssertEqual(board, original)
+        XCTAssertEqual(board.words(matching: nil).count, 4)
+        XCTAssertTrue(board.words(matching: .negative).isEmpty)
+        board.blocks[0].functionOverride = .lighting
+        board.move(lights[0].id, to: "uncategorized", over: lights[1].id)
+        XCTAssertEqual(board.rendered, "a woman, 50mm lens, (rim light:1.20), soft light")
+        XCTAssertEqual(board.blocks.first(where: { $0.id == lights[0].id })?.functionOverride, .lighting)
+        XCTAssertEqual(board.blocks.first(where: { $0.id == lights[1].id })?.weight, 1.2)
+        let unchanged = board
+        board.move(UUID(), to: "uncategorized", over: lights[1].id)
+        board.move(lights[0].id, to: "missing")
+        XCTAssertEqual(board, unchanged)
+    }
     func testWorkflowNodesAreGroupedByFunctionWithoutLosingOrDuplicatingParameters() throws {
         let json = #"{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"portrait"}},"2":{"class_type":"LoadImage","inputs":{"image":"a.png"}},"3":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},"4":{"class_type":"KSampler","inputs":{"steps":20,"cfg":7}},"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}},"6":{"class_type":"SaveImage","inputs":{"filename_prefix":"output"}}}"#
         let workflow = try Workflow.load(Data(json.utf8), name: "Grouped")

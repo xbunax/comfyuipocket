@@ -37,6 +37,16 @@ struct PromptBlockDetailView: View {
                 } header: { Text("生成权重") } footer: {
                     Text("以 (提示词:1.20) 格式提交，实际效果取决于工作流中的文本编码节点。")
                 }
+                Section {
+                    Picker("功能", selection: $draft.functionOverride) {
+                        Text("自动识别 · \(PromptWordFunction.recognize(draft.text).title)").tag(Optional<PromptWordFunction>.none)
+                        ForEach(PromptWordFunction.allCases) { function in
+                            Text(function.title).tag(Optional(function))
+                        }
+                    }
+                } header: { Text("词块功能") } footer: {
+                    Text("按词块文字自动识别。多种含义的词组可手动指定，功能标记不会写入提示词。")
+                }
                 Section("所属分类") {
                     Picker("分类", selection: $draft.categoryID) {
                         ForEach(categories) { Text($0.name).tag($0.id) }

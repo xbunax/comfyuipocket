@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 @MainActor enum PromptBoardStorage {
     private struct Saved: Codable {
@@ -79,6 +78,9 @@ struct PromptFlowLayout: Layout {
 
 struct PromptChipBoard: View {
     @Binding var document: PromptBoardDocument
+    var functionFilter: PromptWordFunction? = nil
+    @State private var boardID = UUID()
+    @State private var haptics = PromptDragHaptics()
     @State private var dragged: UUID?
     @State private var selected: PromptBlock?
     @State private var addingTo: PromptCategory?
@@ -89,7 +91,9 @@ struct PromptChipBoard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(document.categories) { category in
-                categoryCard(category)
+                if functionFilter == nil || document.blocks.contains(where: { $0.categoryID == category.id && $0.function == functionFilter }) {
+                    categoryCard(category)
+                }
             }
             Button("新建分类", systemImage: "plus") { addingCategory = true }
                 .frame(maxWidth: .infinity).padding(.vertical, 10)
@@ -97,6 +101,7 @@ struct PromptChipBoard: View {
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.secondary.opacity(0.25)))
                 .buttonStyle(.plain)
         }
+        .onDisappear { resetDrag() }
         .sheet(item: $selected) { block in
             PromptBlockDetailView(block: block, categories: document.categories, save: { edited in
                 guard let index = document.blocks.firstIndex(where: { $0.id == edited.id }) else { return }
@@ -116,7 +121,7 @@ struct PromptChipBoard: View {
         }
     }
     private func categoryCard(_ category: PromptCategory) -> some View {
-        let blocks = document.blocks.filter { $0.categoryID == category.id }
+        let blocks = document.blocks.filter { $0.categoryID == category.id && (functionFilter == nil || $0.function == functionFilter) }
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Circle().fill(Color.mint.opacity(0.8)).frame(width: 8, height: 8)
@@ -156,88 +161,43 @@ struct PromptChipBoard: View {
         .background(highlightedCategory == category.id ? Color.mint.opacity(0.12) : Color.secondary.opacity(0.06),
                     in: .rect(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.secondary.opacity(0.12)))
-        .onDrop(of: [UTType.text], delegate: PromptWordDropDelegate(document: $document, dragged: $dragged,
-            highlighted: $highlightedCategory, highlightedWord: $highlightedWord, categoryID: category.id, target: nil))
+        .background(PromptCategoryDropZone(actions: dropActions(category: category.id, target: nil)))
     }
     private func chip(_ block: PromptBlock, category: String) -> some View {
-        HStack(spacing: 6) {
-            Button { selected = block } label: {
-                HStack(spacing: 6) {
-                    if !block.enabled { Image(systemName: "pause.circle").font(.caption) }
-                    Text(block.text).font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
-                    if block.weight != 1 { Text(PromptBlock.weightText(block.weight)).font(.caption2.monospacedDigit()).foregroundStyle(.mint) }
-                }
-                .foregroundStyle(block.enabled ? Color.primary : Color.secondary)
-                .padding(.leading, 12).padding(.vertical, 11)
-                .contentShape(Rectangle())
-            }.buttonStyle(.plain)
-                .accessibilityLabel("编辑词块 \(block.text)")
-                .accessibilityIdentifier("promptChip.\(block.text)")
-            Button {
-                document.blocks.removeAll { $0.id == block.id }
-            } label: { Image(systemName: "xmark").font(.caption).padding(.trailing, 10).padding(.vertical, 12) }
-                .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("删除词块 \(block.text)")
-        }
-        .background(block.enabled ? Color.secondary.opacity(0.12) : Color.secondary.opacity(0.04), in: .rect(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(highlightedWord == block.id ? Color.mint : Color.secondary.opacity(0.3),
-                                                               lineWidth: highlightedWord == block.id ? 2 : 1))
-        .opacity(dragged == block.id ? 0.45 : 1)
-        .onDrag {
-            dragged = block.id
-            let provider = PromptWordDragProvider(object: "pocket-word:\(block.id.uuidString)" as NSString)
-            provider.suggestedName = "pocket-word:\(block.id.uuidString)"
-            provider.didEnd = { if dragged == block.id { dragged = nil; highlightedCategory = nil; highlightedWord = nil } }
-            return provider
-        }
-        .onDrop(of: [UTType.text], delegate: PromptWordDropDelegate(document: $document, dragged: $dragged,
-            highlighted: $highlightedCategory, highlightedWord: $highlightedWord, categoryID: category, target: block.id))
-        .accessibilityAction(named: "前移") { moveWord(block, by: -1) }
-        .accessibilityAction(named: "后移") { moveWord(block, by: 1) }
+        PromptNativeChip(block: block, boardID: boardID, highlighted: highlightedWord == block.id,
+            dragging: dragged == block.id, actions: dropActions(category: category, target: block.id),
+            edit: { selected = block }, delete: { document.blocks.removeAll { $0.id == block.id } },
+            move: { moveWord(block, by: $0) }, lifted: {
+                dragged = block.id; highlightedCategory = nil; highlightedWord = nil; haptics.began()
+            }, ended: { resetDrag() })
     }
+    private func dropActions(category: String, target: UUID?) -> PromptWordDropActions {
+        PromptWordDropActions(boardID: boardID, accepts: { id in document.blocks.contains { $0.id == id } }, entered: {
+            guard let dragged, target != dragged else { return }
+            if highlightedCategory != category || highlightedWord != target {
+                highlightedCategory = category; highlightedWord = target; haptics.targetChanged()
+            }
+        }, exited: {
+            if highlightedCategory == category && highlightedWord == target {
+                highlightedCategory = nil; highlightedWord = nil
+            }
+        }, dropped: { id in
+            let before = document
+            withAnimation(.snappy(duration: 0.18)) { document.move(id, to: category, over: target) }
+            if document != before { haptics.completed() }
+            resetDrag()
+        })
+    }
+    private func resetDrag() { dragged = nil; highlightedCategory = nil; highlightedWord = nil }
     private func moveWord(_ block: PromptBlock, by delta: Int) {
         let siblings = document.blocks.filter { $0.categoryID == block.categoryID }
         guard let index = siblings.firstIndex(where: { $0.id == block.id }), siblings.indices.contains(index + delta) else { return }
         document.move(block.id, to: block.categoryID, over: siblings[index + delta].id)
+        haptics.completed()
     }
     private func moveCategory(_ id: String, by delta: Int) {
         guard let index = document.categories.firstIndex(where: { $0.id == id }), document.categories.indices.contains(index + delta) else { return }
         document.categories.swapAt(index, index + delta)
-    }
-}
-
-private struct PromptWordDropDelegate: DropDelegate {
-    @Binding var document: PromptBoardDocument
-    @Binding var dragged: UUID?
-    @Binding var highlighted: String?
-    @Binding var highlightedWord: UUID?
-    let categoryID: String
-    let target: UUID?
-    func validateDrop(info: DropInfo) -> Bool {
-        guard let dragged else { return false }
-        return info.itemProviders(for: [UTType.text]).contains { $0.suggestedName == "pocket-word:\(dragged.uuidString)" }
-    }
-    func dropEntered(info: DropInfo) {
-        guard validateDrop(info: info) else { return }
-        highlighted = categoryID
-        highlightedWord = target
-    }
-    func dropExited(info: DropInfo) {
-        if highlighted == categoryID { highlighted = nil }
-        if highlightedWord == target { highlightedWord = nil }
-    }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool {
-        guard validateDrop(info: info), let id = dragged else { return false }
-        withAnimation(.snappy(duration: 0.18)) { document.move(id, to: categoryID, over: target) }
-        dragged = nil; highlighted = nil; highlightedWord = nil; return true
-    }
-}
-
-private final class PromptWordDragProvider: NSItemProvider {
-    var didEnd: (@MainActor () -> Void)?
-    deinit {
-        let completion = didEnd
-        Task { @MainActor in completion?() }
     }
 }
 

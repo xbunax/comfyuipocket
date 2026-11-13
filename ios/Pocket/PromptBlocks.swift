@@ -6,6 +6,8 @@ struct PromptBlock: Codable, Identifiable, Equatable {
     var weight: Double = 1
     var enabled = true
     var categoryID = "uncategorized"
+    var functionOverride: PromptWordFunction? = nil
+    var function: PromptWordFunction { functionOverride ?? PromptWordFunction.recognize(text) }
     private var original: String
     private var originalText: String
     private var originalWeight: Double

@@ -66,6 +66,7 @@ struct PromptStudioView: View {
     @State private var discard = false
     @State private var showLibrary = false
     @State private var savedVersion = false
+    @State private var functionFilter: PromptWordFunction?
     @FocusState private var textFocused: Bool
 
     init(text: Binding<String>, storageKey: String, context: String = "") {
@@ -105,9 +106,16 @@ struct PromptStudioView: View {
                 if blockEditing {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
-                            Text("点按设置权重与翻译，长按拖动词块。")
+                            PromptFunctionFilter(document: board, selection: $functionFilter)
+                            Text("点按设置权重与翻译，长按拖动词块，拖起和落点变化时有触觉反馈。")
                                 .font(.caption).foregroundStyle(.secondary)
-                            PromptChipBoard(document: editableBoard)
+                            if let functionFilter, board.words(matching: functionFilter).isEmpty {
+                                ContentUnavailableView("没有\(functionFilter.title)词块", systemImage: "line.3.horizontal.decrease",
+                                    description: Text("可切换筛选，或在词块详情里更正功能。"))
+                                Button("显示全部词块") { self.functionFilter = nil }.buttonStyle(.bordered)
+                            } else {
+                                PromptChipBoard(document: editableBoard, functionFilter: functionFilter)
+                            }
                             DisclosureGroup("最终提示词") {
                                 Text(draft.isEmpty ? "尚未添加提示词" : draft)
                                     .font(.callout).textSelection(.enabled)
@@ -210,5 +218,41 @@ struct PromptStudioView: View {
             PromptBoardStorage.save(storageKey, text: text, document: board)
         }
         dismiss()
+    }
+}
+
+private struct PromptFunctionFilter: View {
+    let document: PromptBoardDocument
+    @Binding var selection: PromptWordFunction?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("词块功能", systemImage: "sparkle.magnifyingglass").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("自动识别").font(.caption2).foregroundStyle(.secondary)
+            }
+            Menu {
+                Button { selection = nil } label: {
+                    Label("全部词块 · \(document.blocks.count)", systemImage: selection == nil ? "checkmark" : "square.grid.2x2")
+                }
+                ForEach(PromptWordFunction.allCases) { function in
+                    let count = document.words(matching: function).count
+                    Button { selection = function } label: {
+                        if selection == function { Label("\(function.title) · \(count)", systemImage: "checkmark") }
+                        else { Text("\(function.title) · \(count)") }
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(selection?.title ?? "全部词块")
+                    Text("\(document.words(matching: selection).count)").foregroundStyle(.secondary)
+                    Spacer()
+                    Image(systemName: "line.3.horizontal.decrease")
+                }.font(.subheadline).padding(12)
+                    .background(PocketPalette.accent.opacity(0.07), in: .rect(cornerRadius: 12))
+            }.buttonStyle(.plain).accessibilityIdentifier("promptFunctionFilter")
+            Text("按关键词识别，点词块可手动更正；筛选不会改变提交内容。")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
     }
 }
