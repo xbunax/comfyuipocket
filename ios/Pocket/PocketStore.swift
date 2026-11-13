@@ -161,7 +161,13 @@ final class PocketStore {
     var images: [OutputImage] {
         history.object.sorted { ($0.value["prompt"].array.first?.double ?? 0) > ($1.value["prompt"].array.first?.double ?? 0) }.flatMap { id, entry in
             entry["outputs"].object.sorted(by: { $0.key < $1.key }).flatMap { _, output in
-                output["images"].array.map { OutputImage(promptID: id, filename: $0["filename"].text, subfolder: $0["subfolder"].text, type: $0["type"].text.nonEmpty ?? "output") }
+                let files = output["images"].array + output["gifs"].array + output["videos"].array
+                var seen = Set<String>()
+                return files.compactMap {
+                    guard !$0["filename"].text.isEmpty else { return nil }
+                    let item = OutputImage(promptID: id, filename: $0["filename"].text, subfolder: $0["subfolder"].text, type: $0["type"].text.nonEmpty ?? "output")
+                    return seen.insert(item.id).inserted ? item : nil
+                }
             }
         }
     }

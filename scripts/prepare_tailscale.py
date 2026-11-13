@@ -1,7 +1,7 @@
 """Fetch pinned upstream source and enforce the Pocket data-plane policy.
 
-The patch keeps encrypted discovery packets over DERP for NAT traversal, but
-blocks WireGuard data/handshakes through DERP and peer relays. Exact-match guards
+The patch disables DERP connections and blocks WireGuard data/handshakes through
+peer relays. Control-plane coordination and STUN remain enabled. Exact-match guards
 make upstream changes fail the build instead of silently weakening the policy.
 """
 import io
@@ -49,10 +49,40 @@ def main():
     code = patch(code,
         "func (c *Conn) sendUDP(ipp netip.AddrPort, b []byte, isDisco bool, isGeneveEncap bool) (sent bool, err error) {",
         "\n\tif !isDisco && isGeneveEncap { return false, nil }\n")
+    code = patch(code,
+        "pt, isGeneveEncap := packetLooksLike(b)\n\tsrc := epAddr{ap: ipp}",
+        "\n\t// Pocket: do not accept WireGuard traffic received through peer relays.\n"
+        "\tif isGeneveEncap && pt != packetLooksLikeDisco { return true, false }\n")
     path.write_text(code, encoding="utf-8", newline="\n")
+    derp = ROOT / "wgengine/magicsock/derp.go"
+    code = derp.read_text(encoding="utf-8")
+    anchor = "func (c *Conn) wantDerpLocked() bool { return c.derpMap != nil }"
+    if code.count(anchor) != 1:
+        raise RuntimeError("Tailscale DERP connection gate changed; review policy")
+    derp.write_text(code.replace(anchor, "func (c *Conn) wantDerpLocked() bool { return false } // Pocket: no DERP connections"), encoding="utf-8", newline="\n")
+    test = ROOT / "wgengine/magicsock/pocket_policy_test.go"
+    test.write_text('''package magicsock
+import (
+    "net/netip"
+    "testing"
+    "tailscale.com/tailcfg"
+    "tailscale.com/types/key"
+)
+func TestPocketRelayPolicy(t *testing.T) {
+    c := new(Conn)
+    if c.wantDerpLocked() { t.Fatal("DERP connection gate is open") }
+    sent, err := c.sendAddr(netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, 1), key.NodePublic{}, []byte{1}, false, false)
+    if sent || err != nil { t.Fatal("DERP data was not dropped") }
+    sent, err = c.sendUDP(netip.MustParseAddrPort("127.0.0.1:1234"), []byte{1}, false, true)
+    if sent || err != nil { t.Fatal("Peer Relay data was not dropped") }
+}
+''', encoding="utf-8")
+    licenses = ROOT.parents[1] / "ios/Pocket/Resources"
+    licenses.mkdir(parents=True, exist_ok=True)
+    (licenses / "Tailscale-LICENSE.txt").write_bytes((ROOT / "LICENSE").read_bytes())
     (ROOT / "POCKET_PATCH.txt").write_text(
-        f"Upstream {VERSION}. Pocket blocks outbound WireGuard data and handshakes on DERP/Peer Relay.\n"
-        "Discovery/control traffic remains enabled. No optional relay fallback.\n", encoding="utf-8")
+        f"Upstream {VERSION}. Pocket disables DERP connections and blocks Peer Relay data.\n"
+        "Control coordination and STUN remain enabled. No optional relay fallback.\n", encoding="utf-8")
     print(f"Prepared Tailscale {VERSION} with enforced direct-only application traffic")
 
 

@@ -48,6 +48,14 @@ jobs:
         working-directory: native
       - run: go vet ./...
         working-directory: native
+      - run: go test tailscale.com/wgengine/magicsock -run '^TestPocketRelayPolicy$' -count=1
+        working-directory: native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-dependency-lock
+          path: |
+            native/go.mod
+            native/go.sum
 
   ios:
     runs-on: macos-15
@@ -69,7 +77,9 @@ jobs:
       - name: Build simulator bridge
         run: bash scripts/build_tunnel.sh iphonesimulator "$(uname -m)"
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          swift scripts/make_icon.swift
+          xcodegen generate
       - name: Simulator unit and UI tests
         run: |
           set -o pipefail

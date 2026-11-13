@@ -26,6 +26,13 @@ final class ModelTests: XCTestCase {
     func testRejectsCanvasFormatInsteadOfGuessingWidgetMapping() {
         XCTAssertThrowsError(try Workflow.load(Data(#"{"nodes":[],"links":[]}"#.utf8), name: "Canvas"))
     }
+    func testUnsignedSeedKeepsAll64Bits() throws {
+        let data = Data(#"{"1":{"class_type":"Seed","inputs":{"seed":18446744073709551615}}}"#.utf8)
+        let workflow = try Workflow.load(data, name: "Seed")
+        XCTAssertEqual(workflow.prompt["1"]?["inputs"]["seed"], .unsigned(UInt64.max))
+        let restored = try Workflow.load(JSONEncoder().encode(workflow), name: "Seed")
+        XCTAssertEqual(restored.prompt, workflow.prompt)
+    }
     func testPinnedOrderAndStructuredValues() throws {
         let json = #"{"1":{"class_type":"CustomNode","inputs":{"text":"hello","enabled":true,"config":{"x":3},"strength":0.5}}}"#
         var workflow = try Workflow.load(Data(json.utf8), name: "Custom")

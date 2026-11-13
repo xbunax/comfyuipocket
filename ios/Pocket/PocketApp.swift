@@ -82,7 +82,7 @@ struct ConnectionView: View {
                     Section("应用内组网") {
                         Text("本应用作为独立设备加入你的 Tailnet，无需另装 VPN 应用。ComfyUI 电脑也需要加入同一个网络；地址填写电脑的 Tailscale IP。")
                         Label("仅允许点对点数据传输", systemImage: "lock.shield")
-                        Text("禁用 DERP 与 Peer Relay 的业务数据；无法打洞时连接会失败。登录和网络发现仍使用协调服务，可填写自建 Headscale 地址。")
+                        Text("禁用 DERP 连接与 Peer Relay 的业务数据；无法直连时连接会失败。登录和网络发现仍使用协调服务与 STUN，可填写自建 Headscale 地址。")
                             .font(.caption).foregroundStyle(.secondary)
                         TextField("控制服务器（留空使用 Tailscale）", text: $store.profile.controlURL)
                             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()

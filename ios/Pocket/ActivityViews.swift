@@ -1,5 +1,6 @@
 import SwiftUI
 import Photos
+import AVKit
 
 struct QueueView: View {
     @Environment(PocketStore.self) private var store
@@ -56,7 +57,7 @@ struct GalleryView: View {
             ZStack {
                 PocketBackground()
                 if store.images.isEmpty {
-                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后，可查看最近 50 次任务生成的图片。"))
+                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后，可查看最近 50 次任务生成的图片和视频。"))
                 } else {
                     ScrollView {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -86,10 +87,12 @@ struct RemoteImage: View {
     var body: some View {
         ZStack {
             Color.secondary.opacity(0.08)
-            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            if output.isVideo { Image(systemName: "play.rectangle.fill").font(.largeTitle).foregroundStyle(.mint) }
+            else if let image { Image(uiImage: image).resizable().scaledToFit() }
             else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary) }
             else { ProgressView() }
         }.task(id: output.id) {
+            guard !output.isVideo else { return }
             do {
                 guard let data = try await store.client?.image(output), let decoded = UIImage(data: data) else { failed = true; return }
                 image = decoded
@@ -105,24 +108,31 @@ struct ImageDetail: View {
     @State private var image: UIImage?
     @State private var shareURL: URL?
     @State private var status = ""
+    @State private var player: AVPlayer?
     var body: some View {
         NavigationStack {
             VStack {
                 Spacer()
-                if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView() }
+                if let player { VideoPlayer(player: player) }
+                else if let image { Image(uiImage: image).resizable().scaledToFit() }
+                else if status.isEmpty { ProgressView() }
                 Spacer()
                 Text(output.filename).font(.caption).textSelection(.enabled)
                 HStack {
                     Button("保存到照片", systemImage: "square.and.arrow.down") {
                         Task {
                             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-                            guard auth == .authorized || auth == .limited, let image else { status = "请在系统设置中允许保存照片。"; return }
+                            guard auth == .authorized || auth == .limited else { status = "请在系统设置中允许保存照片。"; return }
                             do {
-                                try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+                                if output.isVideo, let shareURL {
+                                    try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: shareURL) }
+                                } else if let image {
+                                    try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+                                }
                                 status = "已保存到照片。"
                             } catch { status = error.localizedDescription }
                         }
-                    }.buttonStyle(.glassProminent).disabled(image == nil)
+                    }.buttonStyle(.glassProminent).disabled(shareURL == nil)
                     if let shareURL { ShareLink(item: shareURL) { Label("分享", systemImage: "square.and.arrow.up") }.buttonStyle(.glass) }
                 }.padding()
                 if !status.isEmpty { Text(status).font(.caption).padding() }
@@ -130,14 +140,15 @@ struct ImageDetail: View {
                 .toolbar { Button("完成") { dismiss() } }
                 .task {
                     do {
-                        guard let data = try await store.client?.image(output) else { return }
-                        image = UIImage(data: data)
-                        let safeName = URL(fileURLWithPath: output.filename).lastPathComponent
-                        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(safeName)")
-                        try data.write(to: file, options: .atomic); shareURL = file
+                        guard let file = try await store.client?.download(output) else { return }
+                        shareURL = file
+                        if output.isVideo {
+                            player = AVPlayer(url: file)
+                            if URL(fileURLWithPath: output.filename).pathExtension.lowercased() == "webm" { status = "系统可能无法播放 WebM，可使用分享在其他应用中打开。" }
+                        } else { image = UIImage(contentsOfFile: file.path) }
                     } catch { status = error.localizedDescription }
                 }
-                .onDisappear { if let shareURL { try? FileManager.default.removeItem(at: shareURL) } }
+                .onDisappear { player?.pause(); if let shareURL { try? FileManager.default.removeItem(at: shareURL) } }
         }
     }
 }

@@ -16,3 +16,5 @@ __pycache__/
 native/tailscale-source/
 native/libPocketTunnel.*
 native/go.sum
+ios/Pocket/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+ios/Pocket/Resources/Tailscale-LICENSE.txt

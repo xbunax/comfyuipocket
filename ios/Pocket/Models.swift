@@ -7,12 +7,13 @@ enum PocketError: LocalizedError {
 }
 
 enum JSONValue: Codable, Equatable {
-    case string(String), integer(Int64), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
+    case string(String), integer(Int64), unsigned(UInt64), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null }
         else if let v = try? c.decode(Bool.self) { self = .bool(v) }
         else if let v = try? c.decode(Int64.self) { self = .integer(v) }
+        else if let v = try? c.decode(UInt64.self) { self = .unsigned(v) }
         else if let v = try? c.decode(Double.self) { self = .number(v) }
         else if let v = try? c.decode(String.self) { self = .string(v) }
         else if let v = try? c.decode([String: JSONValue].self) { self = .object(v) }
@@ -23,6 +24,7 @@ enum JSONValue: Codable, Equatable {
         switch self {
         case .string(let v): try c.encode(v)
         case .integer(let v): try c.encode(v)
+        case .unsigned(let v): try c.encode(v)
         case .number(let v): try c.encode(v)
         case .bool(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
@@ -36,6 +38,7 @@ enum JSONValue: Codable, Equatable {
         switch self {
         case .string(let v): return v
         case .integer(let v): return String(v)
+        case .unsigned(let v): return String(v)
         case .number(let v): return String(v)
         case .bool(let v): return v ? "true" : "false"
         default: return ""
@@ -91,7 +94,7 @@ struct Workflow: Codable, Identifiable, Equatable {
         prompt.flatMap { nodeID, node in
             node["inputs"].object.compactMap { key, value -> WorkflowField? in
                 // API-format links and structured custom inputs are never flattened or rewritten.
-                switch value { case .string, .integer, .number, .bool: break; default: return nil }
+                switch value { case .string, .integer, .unsigned, .number, .bool: break; default: return nil }
                 return WorkflowField(nodeID: nodeID, key: key, nodeTitle: node["_meta"]["title"].text.nonEmpty ?? node["class_type"].text,
                                      classType: node["class_type"].text, value: value)
             }
@@ -131,5 +134,6 @@ struct OutputImage: Identifiable {
     let subfolder: String
     let type: String
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
+    var isVideo: Bool { ["mp4", "mov", "webm", "m4v"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
 }
 extension String { var nonEmpty: String? { isEmpty ? nil : self } }

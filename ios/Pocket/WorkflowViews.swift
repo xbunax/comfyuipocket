@@ -177,7 +177,8 @@ struct ParameterEditor: View {
                         .onChange(of: value) { _, newValue in if Double(numericDraft) != newValue.double { numericDraft = newValue.text } }
                         .onChange(of: numericDraft) { _, text in
                             let next: JSONValue?
-                            if case .integer = value { next = Int64(text).map(JSONValue.integer) }
+                            if case .integer = value { next = Int64(text).map(JSONValue.integer) ?? UInt64(text).map(JSONValue.unsigned) }
+                            else if case .unsigned = value { next = UInt64(text).map(JSONValue.unsigned) }
                             else { next = Double(text).flatMap { $0.isFinite ? .number($0) : nil } }
                             if let next {
                                 let config = descriptor.count > 1 ? descriptor[1] : .null
