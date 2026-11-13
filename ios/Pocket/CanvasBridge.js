@@ -47,9 +47,15 @@
 
   function change(app, edit) {
     const graph = app.canvas.graph ?? app.rootGraph;
+    const tracker = app.extensionManager?.workflow?.activeWorkflow?.changeTracker;
+    tracker?.captureCanvasState?.();
     graph.beforeChange?.();
     try { return edit(graph); }
-    finally { graph.afterChange?.(); app.canvas.setDirty(true, true); }
+    finally {
+      graph.afterChange?.();
+      tracker?.captureCanvasState?.();
+      app.canvas.setDirty(true, true);
+    }
   }
 
   function ports(app) {
@@ -141,7 +147,11 @@
     async command(name) {
       if (!loaded) throw new Error("画布尚未准备好。");
       if (!commands[name]) throw new Error("不支持的画布操作。");
+      document.activeElement?.blur?.();
+      const tracker = app.extensionManager.workflow.activeWorkflow?.changeTracker;
+      tracker?.captureCanvasState?.();
       await app.extensionManager.command.execute(commands[name]);
+      if (name !== "undo" && name !== "redo") tracker?.captureCanvasState?.();
       app.canvas.setDirty(true, true);
       return true;
     },

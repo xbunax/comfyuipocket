@@ -21,12 +21,15 @@ function fixture() {
 
 test('connect and disconnect edit the actual graph inside undoable transactions', () => {
   const f = fixture();
+  let captures = 0;
+  f.app.extensionManager = {workflow: {activeWorkflow: {changeTracker: {captureCanvasState() { captures++; }}}}};
   assert.equal(connect(f.app, '1', 0, '2', 0), true);
   assert.equal(f.target.inputs[0].link, 7);
   assert.equal(ports(f.app)[1].inputs[0].linked, true);
   disconnect(f.app, '2', 0);
   assert.equal(f.target.inputs[0].link, null);
   assert.deepEqual(f.transactions(), [2, 2]);
+  assert.equal(captures, 4);
 });
 
 test('invalid ports and incompatible types fail without silently rewiring', () => {
