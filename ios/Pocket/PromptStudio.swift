@@ -1,35 +1,37 @@
 import SwiftUI
 
-/// Keep the workflow compact; all prompt editing happens on a dedicated page.
+/// Quick edits stay inline; the separate editor provides room for longer prompts.
 struct PromptInputEditor: View {
     @Binding var text: String
     let preferenceKey: String
     var context: String = ""
     @State private var showEditor = false
+    @FocusState private var inputFocused: Bool
     var body: some View {
-        Button { showEditor = true } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Label("编辑提示词", systemImage: "text.alignleft")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(PocketPalette.accent)
-                    Spacer()
-                    Image(systemName: "arrow.up.left.and.arrow.down.right").font(.caption).foregroundStyle(.secondary)
-                }
-                Text(text.isEmpty ? "添加提示词，开始创作…" : text)
-                    .font(.subheadline).foregroundStyle(text.isEmpty ? Color.secondary : Color.primary)
-                    .lineLimit(3).multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text("\(text.count) 字符 · 文本 / 词块 / 保存版本")
-                    .font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("提示词", text: $text, axis: .vertical)
+                .lineLimit(4...12)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .focused($inputFocused)
+                .accessibilityIdentifier("inlinePromptInput")
+                .padding(14)
+                .background(PocketPalette.accent.opacity(0.05), in: .rect(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(PocketPalette.accent.opacity(0.15)))
+            HStack {
+                Text("\(text.count) 字符").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    inputFocused = false
+                    showEditor = true
+                } label: {
+                    Label("编辑模式", systemImage: "arrow.up.left.and.arrow.down.right")
+                }.font(.subheadline).buttonStyle(.borderless)
+                    .accessibilityIdentifier("promptVisualEditor")
             }
-            .padding(14)
-            .background(PocketPalette.accent.opacity(0.05), in: .rect(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(PocketPalette.accent.opacity(0.15)))
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityIdentifier("promptVisualEditor")
-            .fullScreenCover(isPresented: $showEditor) {
-                PromptStudioView(text: $text, storageKey: preferenceKey, context: context)
-            }
+        }
+        .fullScreenCover(isPresented: $showEditor) {
+            PromptStudioView(text: $text, storageKey: preferenceKey, context: context)
+        }
     }
 }
 

@@ -48,28 +48,16 @@ struct WorkflowParameters: View {
         }
     }
     private func nodeView(_ node: WorkflowNodeSection) -> some View {
-        DisclosureGroup(isExpanded: Binding(get: { contains(expandedNodes, node.id) }, set: { setExpanded(node.id, expanded: $0) })) {
+        let resolution = WorkflowResolution(fields: node.fields)
+        let firstDimension = node.fields.first { $0.key == "width" || $0.key == "height" }?.id
+        return DisclosureGroup(isExpanded: Binding(get: { contains(expandedNodes, node.id) }, set: { setExpanded(node.id, expanded: $0) })) {
             ForEach(node.fields) { field in
-                if let index {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text(field.key).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Button {
-                                if store.workflows[index].pinned.contains(field.id) { store.workflows[index].pinned.removeAll { $0 == field.id } }
-                                else { store.workflows[index].pinned.append(field.id) }
-                                store.save(); store.touch(workflow.id)
-                            } label: { Image(systemName: workflow.pinned.contains(field.id) ? "pin.fill" : "pin") }
-                                .buttonStyle(.borderless).accessibilityLabel("收藏参数 \(field.key)")
-                        }
-                        ParameterEditor(field: field, schema: store.nodeInfo[field.classType], preferenceKey: workflow.id,
-                            value: Binding(get: {
-                                store.workflows.first(where: { $0.id == workflow.id })?.prompt[field.nodeID]?["inputs"][field.key] ?? field.value
-                            }, set: { value in
-                                guard let current = store.workflows.firstIndex(where: { $0.id == workflow.id }) else { return }
-                                store.workflows[current].set(field, value: value); store.save(); store.touch(workflow.id)
-                            }))
-                    }.padding(.vertical, 8)
+                if index != nil {
+                    if let resolution, field.id == resolution.width.id || field.id == resolution.height.id {
+                        if field.id == firstDimension { resolutionEditor(resolution) }
+                    } else {
+                        fieldEditor(field)
+                    }
                 }
             }
         } label: {
@@ -78,6 +66,73 @@ struct WorkflowParameters: View {
                 Text("节点 #\(node.id) · \(node.fields.count) 项参数").font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical, 4)
         }
+    }
+    private func fieldEditor(_ field: WorkflowField, label: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(label ?? field.key).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    guard let current = index else { return }
+                    if store.workflows[current].pinned.contains(field.id) { store.workflows[current].pinned.removeAll { $0 == field.id } }
+                    else { store.workflows[current].pinned.append(field.id) }
+                    store.save(); store.touch(workflow.id)
+                } label: { Image(systemName: workflow.pinned.contains(field.id) ? "pin.fill" : "pin") }
+                    .font(.caption).buttonStyle(.borderless).accessibilityLabel("收藏参数 \(label ?? field.key)")
+            }
+            ParameterEditor(field: field, schema: store.nodeInfo[field.classType], preferenceKey: workflow.id,
+                value: Binding(get: {
+                    store.workflows.first(where: { $0.id == workflow.id })?.prompt[field.nodeID]?["inputs"][field.key] ?? field.value
+                }, set: { value in
+                    guard let current = index,
+                          let liveField = store.workflows[current].fields.first(where: { $0.id == field.id }) else { return }
+                    store.workflows[current].set(liveField, value: value); store.save(); store.touch(workflow.id)
+                }))
+        }.padding(.vertical, 8)
+    }
+    private func resolutionEditor(_ resolution: WorkflowResolution) -> some View {
+        let schema = store.nodeInfo[resolution.width.classType]
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                dimension(resolution.width, label: "宽")
+                dimension(resolution.height, label: "高")
+            }
+            Text("常用分辨率").font(.caption).foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(ResolutionPreset.common) { preset in
+                        let selected = resolution.width.value.double == Double(preset.width) && resolution.height.value.double == Double(preset.height)
+                        let supported = resolution.values(for: preset, schema: schema) != nil
+                        Button { apply(preset, nodeID: resolution.width.nodeID) } label: {
+                            Text(preset.id).font(.caption.monospacedDigit())
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .foregroundStyle(selected ? PocketPalette.accent : Color.primary)
+                                .background(selected ? PocketPalette.accent.opacity(0.12) : Color.secondary.opacity(0.06), in: .capsule)
+                                .overlay(Capsule().strokeBorder(selected ? PocketPalette.accent.opacity(0.4) : Color.clear))
+                        }.buttonStyle(.plain)
+                            .disabled(!supported).opacity(supported ? 1 : 0.35)
+                            .accessibilityLabel("宽 \(preset.width)，高 \(preset.height)")
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                }
+            }
+        }.padding(.vertical, 8)
+    }
+    private func dimension(_ field: WorkflowField, label: String) -> some View {
+        fieldEditor(field, label: label)
+            .font(.title3.monospacedDigit())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .background(Color.secondary.opacity(0.05), in: .rect(cornerRadius: 14))
+    }
+    private func apply(_ preset: ResolutionPreset, nodeID: String) {
+        guard let current = index,
+              let node = store.workflows[current].nodeSections.first(where: { $0.id == nodeID }),
+              let resolution = WorkflowResolution(fields: node.fields),
+              let values = resolution.values(for: preset, schema: store.nodeInfo[resolution.width.classType]) else { return }
+        store.workflows[current].set(resolution.width, value: values.width)
+        store.workflows[current].set(resolution.height, value: values.height)
+        store.save(); store.touch(workflow.id)
     }
     private func contains(_ source: String, _ id: String) -> Bool { source.split(separator: "\n").contains(Substring(id)) }
     private func toggle(_ source: inout String, _ id: String) {

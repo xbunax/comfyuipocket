@@ -6,6 +6,30 @@ import XCTest
 #endif
 
 final class ModelTests: XCTestCase {
+    func testResolutionPairsOnlyNumericInputsOnTheSameNode() throws {
+        let workflow = try Workflow.load(Data(#"{"1":{"class_type":"Size","inputs":{"width":512,"height":768}},"2":{"class_type":"Resize","inputs":{"width":["1",0],"height":512}},"3":{"class_type":"Size","inputs":{"width":1024}}}"#.utf8), name: "Resolution")
+        let first = workflow.fields.filter { $0.nodeID == "1" }
+        XCTAssertNotNil(WorkflowResolution(fields: first))
+        XCTAssertNil(WorkflowResolution(fields: workflow.fields.filter { $0.nodeID == "2" }))
+        XCTAssertNil(WorkflowResolution(fields: workflow.fields.filter { $0.nodeID == "3" }))
+        let width = try XCTUnwrap(workflow.fields.first { $0.nodeID == "3" && $0.key == "width" })
+        let height = try XCTUnwrap(first.first { $0.key == "height" })
+        XCTAssertNil(WorkflowResolution(fields: [width, height]))
+    }
+    func testResolutionPresetsRespectBoundsStepChoicesAndNumericTypes() throws {
+        let width = WorkflowField(nodeID: "1", key: "width", nodeTitle: "Size", classType: "Size", value: .unsigned(512))
+        let height = WorkflowField(nodeID: "1", key: "height", nodeTitle: "Size", classType: "Size", value: .number(512))
+        let resolution = try XCTUnwrap(WorkflowResolution(fields: [width, height]))
+        let schema = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"input":{"required":{"width":["INT",{"min":64,"max":1024,"step":64}],"height":["INT",{"min":64,"max":1024,"step":64}]}}}"#.utf8))
+        let values = try XCTUnwrap(resolution.values(for: ResolutionPreset(width: 768, height: 1024), schema: schema))
+        XCTAssertEqual(values.width, .unsigned(768)); XCTAssertEqual(values.height, .number(1024))
+        XCTAssertNil(resolution.values(for: ResolutionPreset(width: 1280, height: 720), schema: schema))
+        XCTAssertNil(resolution.values(for: ResolutionPreset(width: 513, height: 512), schema: schema))
+        XCTAssertNil(resolution.values(for: ResolutionPreset(width: 32, height: 512), schema: schema))
+        let choices = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"input":{"optional":{"width":[[512,1024]],"height":["COMBO",{"options":[512,1024]}]}}}"#.utf8))
+        XCTAssertNil(resolution.values(for: ResolutionPreset(width: 768, height: 1024), schema: choices))
+        XCTAssertNotNil(resolution.values(for: ResolutionPreset(width: 1024, height: 512), schema: choices))
+    }
     func testWorkflowNodesAreGroupedByFunctionWithoutLosingOrDuplicatingParameters() throws {
         let json = #"{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"portrait"}},"2":{"class_type":"LoadImage","inputs":{"image":"a.png"}},"3":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"m.safetensors"}},"4":{"class_type":"KSampler","inputs":{"steps":20,"cfg":7}},"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512}},"6":{"class_type":"SaveImage","inputs":{"filename_prefix":"output"}}}"#
         let workflow = try Workflow.load(Data(json.utf8), name: "Grouped")

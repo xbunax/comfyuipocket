@@ -164,6 +164,63 @@ struct WorkflowField: Identifiable {
     }
 }
 
+struct ResolutionPreset: Identifiable, Sendable {
+    let width: Int
+    let height: Int
+    var id: String { "\(width)×\(height)" }
+    static let common = [
+        ResolutionPreset(width: 512, height: 512),
+        ResolutionPreset(width: 768, height: 768),
+        ResolutionPreset(width: 1024, height: 1024),
+        ResolutionPreset(width: 832, height: 1216),
+        ResolutionPreset(width: 1216, height: 832),
+        ResolutionPreset(width: 1280, height: 720),
+        ResolutionPreset(width: 720, height: 1280)
+    ]
+}
+
+/// Only pair editable numeric dimensions on the same node. Never replace links.
+struct WorkflowResolution {
+    let width: WorkflowField
+    let height: WorkflowField
+    init?(fields: [WorkflowField]) {
+        guard let width = fields.first(where: { $0.key == "width" }),
+              let height = fields.first(where: { $0.key == "height" }),
+              width.nodeID == height.nodeID,
+              Self.isNumeric(width.value), Self.isNumeric(height.value) else { return nil }
+        self.width = width; self.height = height
+    }
+    func values(for preset: ResolutionPreset, schema: JSONValue) -> (width: JSONValue, height: JSONValue)? {
+        guard let w = Self.value(preset.width, field: width, schema: schema),
+              let h = Self.value(preset.height, field: height, schema: schema) else { return nil }
+        return (w, h)
+    }
+    private static func isNumeric(_ value: JSONValue) -> Bool {
+        switch value { case .integer, .unsigned, .number: return true; default: return false }
+    }
+    private static func value(_ size: Int, field: WorkflowField, schema: JSONValue) -> JSONValue? {
+        guard size > 0 else { return nil }
+        let descriptor = (schema["input"]["required"].object[field.key] ?? schema["input"]["optional"].object[field.key] ?? .null).array
+        let choices = InputSchema.choices(descriptor)
+        if !choices.isEmpty && !choices.contains(where: { isNumeric($0) && $0.double == Double(size) }) { return nil }
+        let config = descriptor.count > 1 ? descriptor[1] : .null
+        let number = Double(size)
+        if config.object["min"] != nil && number < config["min"].double { return nil }
+        if config.object["max"] != nil && number > config["max"].double { return nil }
+        let step = config["step"].double
+        if step.isFinite && step > 0 {
+            let units = (number - (config.object["min"] == nil ? 0 : config["min"].double)) / step
+            if abs(units - units.rounded()) > 0.000001 { return nil }
+        }
+        switch field.value {
+        case .integer: return .integer(Int64(size))
+        case .unsigned: return .unsigned(UInt64(size))
+        case .number: return .number(number)
+        default: return nil
+        }
+    }
+}
+
 enum InputSchema {
     static func choices(_ descriptor: [JSONValue]) -> [JSONValue] {
         guard let first = descriptor.first else { return [] }

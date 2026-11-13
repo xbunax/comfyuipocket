@@ -213,7 +213,6 @@ struct WorkflowEditor: View {
     @State private var exporting = false
     @State private var document = WorkflowDocument(data: Data())
     @State private var batchCount = 1
-    @State private var randomizeBatchSeeds = true
     @State private var showBatchSettings = false
     @State private var selectedOutput: OutputImage?
     private var index: Int? { store.workflows.firstIndex { $0.id == id } }
@@ -293,7 +292,7 @@ struct WorkflowEditor: View {
                                     .padding(.vertical, 5)
                             }.buttonStyle(.glass).disabled(store.busy)
                             Button {
-                                Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: randomizeBatchSeeds) }
+                                Task { await store.submit(store.workflows[index], count: batchCount, randomizeSeeds: true) }
                             } label: {
                                 Label(store.busy ? "提交中" : (batchCount > 1 ? "运行 ×\(batchCount)" : "运行"), systemImage: "play.fill")
                                     .frame(maxWidth: .infinity).padding(.vertical, 5)
@@ -316,7 +315,7 @@ struct WorkflowEditor: View {
                 }
                 .sheet(isPresented: $showGraph) { GraphView(workflow: workflow) }
                 .sheet(isPresented: $showCanvas) { WorkflowCanvasView(workflow: workflow) }
-                .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount, randomizeSeeds: $randomizeBatchSeeds) }
+                .sheet(isPresented: $showBatchSettings) { BatchSettingsView(count: $batchCount) }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: workflow.name) { result in
                     if case .failure(let error) = result { store.error = error.localizedDescription }
                 }
@@ -327,23 +326,22 @@ struct WorkflowEditor: View {
 }
 
 private struct BatchSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Binding var count: Int
-    @Binding var randomizeSeeds: Bool
+    @ScaledMetric(relativeTo: .body) private var sheetHeight: CGFloat = 170
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Text("\(count) 次生成").font(.title2.bold().monospacedDigit())
-                        .frame(maxWidth: .infinity).padding(.vertical, 4)
-                    Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
-                        .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
-                    HStack { Text("1 次"); Spacer(); Text("20 次") }.font(.caption).foregroundStyle(.secondary)
-                } header: { Text("批量次数") } footer: { Text("这批生成会合并显示为一个任务。") }
-                Section { Toggle("后续生成随机种子", isOn: $randomizeSeeds) }
-            }.navigationTitle("批量生成").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-        }.presentationDetents([.medium])
+        VStack(spacing: 18) {
+            HStack {
+                Text("批量次数").font(.headline)
+                Spacer()
+                Text("\(count) 次").font(.title3.bold().monospacedDigit())
+                    .foregroundStyle(PocketPalette.accent)
+            }
+            Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
+                .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
+            HStack { Text("1"); Spacer(); Text("20") }.font(.caption).foregroundStyle(.secondary)
+        }.padding(24)
+            .presentationDetents([.height(sheetHeight)])
+            .presentationDragIndicator(.visible)
     }
 }
 
