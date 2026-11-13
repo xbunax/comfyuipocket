@@ -28,9 +28,26 @@ class CatalogTests(unittest.TestCase):
         first = self.store.save({"name": "One", "prompt": PROMPT})
         second = self.store.save({**first, "name": "Two"})
         self.assertEqual(second["id"], first["id"])
+        self.assertGreater(second["updatedAt"], first["updatedAt"])
         self.assertEqual(self.store.list()[0]["name"], "Two")
+        self.assertEqual(self.store.list()[0]["updatedAt"], second["updatedAt"])
         self.store.delete(first["id"])
         self.assertEqual(self.store.list(), [])
+
+    def test_phone_update_keeps_ui_graph(self):
+        first = self.store.save({"name": "Desktop", "prompt": PROMPT, "workflow": {"nodes": [{"id": 1}]}})
+        self.store.save({"id": first["id"], "name": "Phone", "prompt": PROMPT})
+        stored = self.store.get(first["id"])
+        self.assertEqual(stored["name"], "Phone")
+        self.assertEqual(stored["workflow"], {"nodes": [{"id": 1}]})
+
+    def test_legacy_entry_gets_file_timestamp(self):
+        key = "a" * 32
+        pathlib.Path(self.temp.name, f"{key}.json").write_text(
+            json.dumps({"id": key, "name": "Old", "prompt": PROMPT}), encoding="utf-8")
+        value = self.store.get(key)
+        self.assertIsInstance(value["updatedAt"], int)
+        self.assertEqual(self.store.list()[0]["updatedAt"], value["updatedAt"])
 
     def test_path_traversal_is_rejected(self):
         for key in ["../outside", "/tmp/file", "..%2foutside", "A" * 32, "x", ""]:

@@ -13,9 +13,4 @@ DerivedData/
 __pycache__/
 .pytest_cache/
 .venv/
-native/tailscale-source/
-native/libPocketTunnel.*
-native/go.sum
-native/cache/
 ios/Pocket/Assets.xcassets/AppIcon.appiconset/AppIcon.png
-ios/Pocket/Resources/Tailscale-LICENSE.txt

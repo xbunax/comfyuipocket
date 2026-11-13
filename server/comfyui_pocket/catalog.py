@@ -2,12 +2,17 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MAX_BYTES = 20 * 1024 * 1024
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+
+
+def now_millis():
+    return int(time.time() * 1000)
 
 
 def validate_prompt(prompt):
@@ -41,7 +46,8 @@ class Catalog:
             for path in self.root.glob("*.json"):
                 try:
                     value = self.get(path.stem)
-                    items.append({"id": value["id"], "name": value["name"], "nodes": len(value["prompt"])})
+                    items.append({"id": value["id"], "name": value["name"], "nodes": len(value["prompt"]),
+                                  "updatedAt": value["updatedAt"]})
                 except (ValueError, OSError, KeyError):
                     continue
         return sorted(items, key=lambda item: item["name"].casefold())
@@ -52,7 +58,12 @@ class Catalog:
             raise ValueError("workflow exceeds 20 MiB")
         with path.open(encoding="utf-8") as stream:
             value = json.load(stream)
+        if not isinstance(value, dict):
+            raise ValueError("invalid workflow")
         validate_prompt(value.get("prompt"))
+        if not isinstance(value.get("updatedAt"), int) or isinstance(value.get("updatedAt"), bool):
+            # Catalogs written before automatic sync fall back to the file timestamp.
+            value["updatedAt"] = int(path.stat().st_mtime * 1000)
         return value
 
     def save(self, data):
@@ -63,9 +74,23 @@ class Catalog:
             raise ValueError("name must be 1–200 characters")
         workflow_id = data.get("id") or uuid.uuid4().hex
         path = self.path(workflow_id)
+        existing = None
+        if path.exists():
+            try:
+                existing = self.get(workflow_id)
+            except (ValueError, OSError):
+                existing = None
         value = {"id": workflow_id, "name": name.strip(), "prompt": validate_prompt(data.get("prompt"))}
         if "workflow" in data:
             value["workflow"] = data["workflow"]
+        elif isinstance(existing, dict) and "workflow" in existing:
+            # Phone edits send only the API prompt; keep the desktop UI graph.
+            value["workflow"] = existing["workflow"]
+        previous = existing.get("updatedAt") if isinstance(existing, dict) else None
+        stamp = now_millis()
+        if isinstance(previous, int) and stamp <= previous:
+            stamp = previous + 1
+        value["updatedAt"] = stamp
         encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(encoded) > MAX_BYTES:
             raise ValueError("workflow exceeds 20 MiB")

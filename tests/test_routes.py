@@ -25,6 +25,29 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
                     raise KeyError(user)
                 return str(root / user / file)
 
+            def get_request_user_id(self, request):
+                user = request.headers.get("comfy-user", "default")
+                if user not in ("default", "second"):
+                    raise KeyError(user)
+                return user
+
+        workflows = root / "default" / "workflows" / "nested"
+        workflows.mkdir(parents=True)
+        (workflows / "demo.json").write_text(json.dumps({"nodes": [], "links": []}), encoding="utf-8")
+
+        previous_folder_paths = sys.modules.get("folder_paths")
+        folder_paths = types.ModuleType("folder_paths")
+        folder_paths.get_public_user_directory = lambda user: str(root / user)
+        sys.modules["folder_paths"] = folder_paths
+
+        def restore_folder_paths():
+            if previous_folder_paths is not None:
+                sys.modules["folder_paths"] = previous_folder_paths
+            else:
+                sys.modules.pop("folder_paths", None)
+
+        self.addCleanup(restore_folder_paths)
+
         self.prompt_server = types.SimpleNamespace(routes=web.RouteTableDef(), user_manager=Users())
         previous = sys.modules.get("server")
         server = types.ModuleType("server")
@@ -52,14 +75,43 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         body = {"name": "Example", "prompt": {"1": {"class_type": "Example", "inputs": {"seed": 9007199254740993}}}}
         response = await self.client.post("/pocket/v1/workflows", json=body)
         self.assertEqual(response.status, 201)
-        key = (await response.json())["id"]
+        created = await response.json()
+        self.assertIsInstance(created["updatedAt"], int)
+        key = created["id"]
         response = await self.client.get(f"/pocket/v1/workflows/{key}")
         self.assertEqual((await response.json())["prompt"], body["prompt"])
         listing = await (await self.client.get("/pocket/v1/workflows")).json()
         self.assertEqual(len(listing["workflows"]), 1)
+        self.assertEqual(listing["workflows"][0]["updatedAt"], created["updatedAt"])
         response = await self.client.delete(f"/pocket/v1/workflows/{key}")
         self.assertEqual(response.status, 200)
         self.assertEqual((await self.client.get(f"/pocket/v1/workflows/{key}")).status, 404)
+
+    async def test_phone_update_keeps_ui_graph_and_advances_timestamp(self):
+        body = {"name": "UI", "prompt": {"1": {"class_type": "Example", "inputs": {"value": 1}}},
+                "workflow": {"nodes": [{"id": 1}]}}
+        first = await (await self.client.post("/pocket/v1/workflows", json=body)).json()
+        second = await (await self.client.post("/pocket/v1/workflows", json={
+            "id": first["id"], "name": "Phone", "prompt": {"1": {"class_type": "Example", "inputs": {"value": 2}}}
+        })).json()
+        self.assertEqual(second["id"], first["id"])
+        self.assertGreater(second["updatedAt"], first["updatedAt"])
+        stored = await (await self.client.get(f"/pocket/v1/workflows/{first['id']}")).json()
+        self.assertEqual(stored["name"], "Phone")
+        self.assertEqual(stored["workflow"], {"nodes": [{"id": 1}]})
+
+    async def test_comfy_workflows_are_listed_and_read(self):
+        listing = await (await self.client.get("/pocket/v1/comfy-workflows")).json()
+        self.assertEqual([item["path"] for item in listing["workflows"]], ["nested/demo.json"])
+        item = listing["workflows"][0]
+        self.assertIsInstance(item["modified"], int)
+        response = await self.client.get("/pocket/v1/comfy-workflows/file", params={"path": item["path"]})
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["nodes"], [])
+        self.assertEqual((await self.client.get("/pocket/v1/comfy-workflows/file",
+                                                params={"path": "../outside.json"})).status, 400)
+        self.assertEqual((await self.client.get("/pocket/v1/comfy-workflows/file",
+                                                params={"path": "nested/missing.json"})).status, 404)
 
     async def test_origin_content_type_and_shape_rejections(self):
         response = await self.client.post("/pocket/v1/workflows", json={}, headers={"Origin": "https://evil.example"})

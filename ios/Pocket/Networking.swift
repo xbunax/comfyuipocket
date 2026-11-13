@@ -1,42 +1,13 @@
 import Foundation
 
-// Calls into the embedded Go runtime run on a serial background queue, never the UI thread.
-actor TailnetBridge {
-    static let shared = TailnetBridge()
-    private func read(_ result: UnsafeMutablePointer<CChar>?) throws -> JSONValue {
-        guard let result else { throw PocketError.message("Tailscale 没有返回结果。") }
-        defer { PocketFree(result) }
-        let json = try JSONDecoder().decode(JSONValue.self, from: Data(String(cString: result).utf8))
-        if let error = json["error"].text.nonEmpty { throw PocketError.message(error) }
-        return json
-    }
-    func start(controlURL: String) throws {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let state = support.appendingPathComponent("Tailnet", isDirectory: true)
-        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true,
-                                               attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-        var resource = URLResourceValues(); resource.isExcludedFromBackup = true
-        var stateURL = state; try stateURL.setResourceValues(resource)
-        _ = try state.path.withCString { dir in try controlURL.withCString { control in try read(PocketStart(dir, control)) } }
-    }
-    func status() throws -> JSONValue { try read(PocketStatus()) }
-    func forward(_ url: URL) throws -> (URL, String) {
-        let value = try url.absoluteString.withCString { try read(PocketForward($0)) }
-        guard let base = URL(string: value["url"].text) else { throw PocketError.message("无法建立应用内连接。") }
-        return (base, value["token"].text)
-    }
-    func stop() { PocketStop() }
-}
-
 @MainActor
 final class ComfyClient {
     let baseURL: URL
-    let bridgeToken: String
     let clientID = UUID().uuidString
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
-    init(baseURL: URL, bridgeToken: String = "") {
-        self.baseURL = baseURL; self.bridgeToken = bridgeToken
+    init(baseURL: URL) {
+        self.baseURL = baseURL
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
@@ -50,9 +21,17 @@ final class ComfyClient {
     }
     func request(_ path: String, method: String = "GET", body: JSONValue? = nil, query: [URLQueryItem] = []) throws -> URLRequest {
         var r = URLRequest(url: url(path, query: query)); r.httpMethod = method
-        if !bridgeToken.isEmpty { r.setValue(bridgeToken, forHTTPHeaderField: "X-Pocket-Bridge") }
         if let body { r.httpBody = try JSONEncoder().encode(body); r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return r
+    }
+    func remove(_ path: String) async throws {
+        let (data, response) = try await session.data(for: request(path, method: "DELETE"))
+        guard let http = response as? HTTPURLResponse else { throw PocketError.message("服务器没有返回响应。") }
+        if http.statusCode == 404 { return }
+        guard (200...299).contains(http.statusCode) else {
+            let message = String(data: data.prefix(2000), encoding: .utf8) ?? "无响应内容"
+            throw PocketError.message("服务器返回 HTTP \(http.statusCode)：\(message)")
+        }
     }
     private func checked(_ r: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: r)

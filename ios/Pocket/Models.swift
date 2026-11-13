@@ -52,8 +52,6 @@ struct ServerProfile: Codable, Equatable {
     var host = ""
     var port = "8188"
     var https = false
-    var tailscale = false
-    var controlURL = ""
     func baseURL() throws -> URL {
         let raw = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let ip = raw.hasPrefix("[") && raw.hasSuffix("]") ? String(raw.dropFirst().dropLast()) : raw
@@ -75,6 +73,9 @@ struct Workflow: Codable, Identifiable, Equatable {
     var name: String
     var prompt: [String: JSONValue]
     var pinned: [String] = []
+    static func newID() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
     static func load(_ data: Data, name: String) throws -> Workflow {
         let json = try JSONDecoder().decode(JSONValue.self, from: data)
         let root = json.object
@@ -86,7 +87,7 @@ struct Workflow: Codable, Identifiable, Equatable {
         }) else {
             throw PocketError.message("需要 ComfyUI 的 API 格式工作流。普通画布 JSON 请在桌面端使用 Pocket 插件导出。")
         }
-        return Workflow(id: root["id"]?.text.nonEmpty ?? UUID().uuidString,
+        return Workflow(id: root["id"]?.text.nonEmpty ?? newID(),
                         name: root["name"]?.text.nonEmpty ?? name, prompt: prompt,
                         pinned: root["pinned"]?.array.map(\.text) ?? [])
     }
@@ -153,3 +154,19 @@ struct OutputImage: Identifiable {
     }
 }
 extension String { var nonEmpty: String? { isEmpty ? nil : self } }
+
+struct SyncRecord: Codable, Equatable {
+    var serverUpdatedAt: Double = 0
+    var dirty: Bool = false
+}
+
+enum WorkflowSync {
+    // A server deletion removes a local copy only when it was synced and has no unsent edits.
+    static func idsToRemove(records: [String: SyncRecord], serverIDs: Set<String>,
+                            pendingDeletes: Set<String>) -> [String] {
+        records.compactMap { id, record in
+            record.serverUpdatedAt > 0 && !record.dirty
+                && !serverIDs.contains(id) && !pendingDeletes.contains(id) ? id : nil
+        }.sorted()
+    }
+}

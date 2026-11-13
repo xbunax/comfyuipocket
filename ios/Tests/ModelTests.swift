@@ -53,4 +53,28 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(workflow.fields.map(\.key), ["strength", "enabled", "text"])
         XCTAssertEqual(workflow.prompt["1"]?["inputs"]["config"], .object(["x": .integer(3)]))
     }
+    func testWorkflowIDsAreServerCompatible() {
+        let id = Workflow.newID()
+        XCTAssertEqual(id.count, 32)
+        XCTAssertNotNil(id.range(of: "^[a-f0-9]{32}$", options: .regularExpression))
+        XCTAssertNotEqual(id, Workflow.newID())
+    }
+    func testSyncRemovalOnlyCleansSyncedUneditedWorkflows() {
+        let records = [
+            "aaaa": SyncRecord(serverUpdatedAt: 100, dirty: false),
+            "bbbb": SyncRecord(serverUpdatedAt: 0, dirty: false),
+            "cccc": SyncRecord(serverUpdatedAt: 100, dirty: true),
+            "dddd": SyncRecord(serverUpdatedAt: 100, dirty: false)
+        ]
+        let removed = WorkflowSync.idsToRemove(records: records,
+                                               serverIDs: ["dddd"],
+                                               pendingDeletes: ["cccc"])
+        XCTAssertEqual(removed, ["aaaa"])
+    }
+    func testLegacyProfileWithTailscaleFieldsStillDecodes() throws {
+        let data = Data(#"{"host":"10.0.0.5","port":"8188","https":false,"tailscale":true,"controlURL":""}"#.utf8)
+        let profile = try JSONDecoder().decode(ServerProfile.self, from: data)
+        XCTAssertEqual(profile.host, "10.0.0.5")
+        XCTAssertFalse(profile.https)
+    }
 }

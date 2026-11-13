@@ -17,18 +17,39 @@ final class PocketStore {
     var activeNode = ""
     var activePrompt = ""
     var preview: Data?
-    var tailnetStatus: JSONValue = .object([:])
     var pluginAvailable = false
+    var syncStatus = "等待连接"
+    var syncing = false
     var busy = false
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var syncLoop: Task<Void, Never>?
+    @ObservationIgnored private var pushTask: Task<Void, Never>?
     @ObservationIgnored private var lastConnection = UUID()
+    @ObservationIgnored private var syncRecords: [String: SyncRecord] = [:]
+    @ObservationIgnored private var pendingDeletes: Set<String> = []
+    @ObservationIgnored private var lastSyncError: String?
     private static var libraryURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("workflows.json")
     }
     init() {
         profile = (UserDefaults.standard.data(forKey: "server").flatMap { try? JSONDecoder().decode(ServerProfile.self, from: $0) }) ?? ServerProfile()
         workflows = (try? JSONDecoder().decode([Workflow].self, from: Data(contentsOf: Self.libraryURL))) ?? []
+        syncRecords = (UserDefaults.standard.data(forKey: "syncRecords").flatMap { try? JSONDecoder().decode([String: SyncRecord].self, from: $0) }) ?? [:]
+        pendingDeletes = Set(UserDefaults.standard.stringArray(forKey: "pendingDeletes") ?? [])
+        // Normalize legacy UUIDs and keep phone edits from versions before automatic sync.
+        for index in workflows.indices {
+            let id = workflows[index].id
+            let canonical = id.count == 32 && id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil
+            if !canonical {
+                let next = Workflow.newID()
+                workflows[index].id = next
+                syncRecords.removeValue(forKey: id)
+                syncRecords[next] = SyncRecord(serverUpdatedAt: 0, dirty: true)
+            } else if syncRecords[id] == nil {
+                syncRecords[id] = SyncRecord(serverUpdatedAt: 0, dirty: true)
+            }
+        }
     }
     func save() {
         do {
@@ -36,23 +57,17 @@ final class PocketStore {
             UserDefaults.standard.set(try JSONEncoder().encode(profile), forKey: "server")
         } catch { self.error = "本地保存失败：\(error.localizedDescription)" }
     }
+    private func saveSyncState() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(syncRecords), forKey: "syncRecords")
+        UserDefaults.standard.set(Array(pendingDeletes), forKey: "pendingDeletes")
+    }
     func connect() async {
         guard !connecting else { return }
         disconnect(); connecting = true
         let attempt = UUID(); lastConnection = attempt
         defer { if lastConnection == attempt { connecting = false } }
         do {
-            let target = try profile.baseURL()
-            var base = target; var token = ""
-            if profile.tailscale {
-                try await TailnetBridge.shared.start(controlURL: profile.controlURL)
-                tailnetStatus = try await TailnetBridge.shared.status()
-                guard tailnetStatus["state"].text == "Running" else {
-                    throw PocketError.message("请先在组网设置中完成 Tailscale 登录，再连接服务器。")
-                }
-                (base, token) = try await TailnetBridge.shared.forward(target)
-            }
-            let next = ComfyClient(baseURL: base, bridgeToken: token)
+            let next = ComfyClient(baseURL: try profile.baseURL())
             _ = try await next.json("system_stats")
             guard lastConnection == attempt else { return }
             client = next; connected = true; save()
@@ -60,14 +75,22 @@ final class PocketStore {
             await refresh()
             do { nodeInfo = try await next.json("object_info") } catch { self.notice = "节点元信息暂不可用，仍可编辑已有参数。" }
             pluginAvailable = (try? await next.json("pocket/v1/info"))?["version"].text.nonEmpty != nil
+            if pluginAvailable {
+                await syncNow()
+            } else {
+                syncStatus = "未检测到 Pocket 插件"
+                notice = "未检测到 Pocket 插件，工作流自动同步已停用。"
+            }
         } catch { if lastConnection == attempt { self.error = error.localizedDescription } }
     }
     func disconnect() {
         lastConnection = UUID(); connecting = false
         events?.cancel(); events = nil; polling?.cancel(); polling = nil
+        syncLoop?.cancel(); syncLoop = nil; pushTask?.cancel(); pushTask = nil
         client?.disconnect(); client = nil; connected = false; socketConnected = false
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
-        preview = nil; progress = 0; activeNode = ""; activePrompt = ""; pluginAvailable = false
+        preview = nil; progress = 0; activeNode = ""; activePrompt = ""
+        pluginAvailable = false; syncing = false; syncStatus = "等待连接"
     }
     private func startEvents(_ api: ComfyClient) {
         events?.cancel()
@@ -84,12 +107,23 @@ final class PocketStore {
                 await self?.refresh()
             }
         }
+        syncLoop?.cancel()
+        syncLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                guard !Task.isCancelled else { return }
+                await self?.syncNow()
+            }
+        }
     }
     func resume() async {
         guard connected, let client else { return }
-        startEvents(client); await refresh()
+        startEvents(client); await refresh(); await syncNow()
     }
-    func suspend() { events?.cancel(); polling?.cancel(); client?.disconnect(); socketConnected = false }
+    func suspend() {
+        events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
+        client?.disconnect(); socketConnected = false
+    }
     private func handle(_ event: JSONValue) {
         let d = event["data"]
         switch event["type"].text {
@@ -133,20 +167,128 @@ final class PocketStore {
         do { _ = try await client?.json("interrupt", method: "POST", body: .object([:])); await refresh() }
         catch { self.error = error.localizedDescription }
     }
-    func sync() async {
-        guard let api = client, !busy else { return }
-        busy = true; defer { busy = false }
+    func touch(_ id: String) {
+        var record = syncRecords[id] ?? SyncRecord()
+        record.dirty = true
+        syncRecords[id] = record
+        saveSyncState()
+        guard connected, pluginAvailable else { return }
+        pushTask?.cancel()
+        pushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            await self?.pushNow()
+        }
+    }
+    func delete(_ id: String) {
+        let canonical = id.count == 32 && id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil
+        if canonical { pendingDeletes.insert(id) }
+        syncRecords.removeValue(forKey: id)
+        workflows.removeAll { $0.id == id }
+        save(); saveSyncState()
+        guard canonical, connected, pluginAvailable else { return }
+        pushTask?.cancel()
+        pushTask = Task { [weak self] in await self?.pushNow() }
+    }
+    func duplicate(_ workflow: Workflow) {
+        var copy = workflow
+        copy.id = Workflow.newID()
+        copy.name += " 副本"
+        workflows.append(copy)
+        syncRecords[copy.id] = SyncRecord(dirty: true)
+        save(); saveSyncState(); touch(copy.id)
+    }
+    func syncNow() async {
+        guard let api = client, connected, pluginAvailable, !syncing else { return }
+        syncing = true; defer { syncing = false }
+        syncStatus = "正在自动同步"
+        do { try await flushPendingDeletes(api) } catch { recordSyncError(error) }
+        do { try await pushDirty(api) } catch { recordSyncError(error) }
+        guard client === api else { return }
         do {
             let list = try await api.json("pocket/v1/workflows")
-            var count = 0
+            guard client === api else { return }
+            var serverIDs = Set<String>()
+            var changed = false
             for item in list["workflows"].array {
-                let full = try await api.json("pocket/v1/workflows/\(item["id"].text)")
-                let workflow = try Workflow.load(JSONEncoder().encode(full), name: item["name"].text)
-                // Preserve the user's mobile parameter edits. Re-import a deleted item to get a fresh server copy.
-                if !workflows.contains(where: { $0.id == workflow.id }) { workflows.append(workflow); count += 1 }
+                let id = item["id"].text
+                guard id.count == 32, !pendingDeletes.contains(id) else { continue }
+                serverIDs.insert(id)
+                let remoteUpdated = item["updatedAt"].double
+                if let record = syncRecords[id], record.dirty {
+                    continue
+                }
+                if let known = syncRecords[id]?.serverUpdatedAt, remoteUpdated > 0, known == remoteUpdated,
+                   workflows.contains(where: { $0.id == id }) {
+                    continue
+                }
+                let full = try await api.json("pocket/v1/workflows/\(id)")
+                guard client === api else { return }
+                let remote = try Workflow.load(JSONEncoder().encode(full), name: item["name"].text)
+                if let index = workflows.firstIndex(where: { $0.id == id }) {
+                    workflows[index].name = remote.name
+                    workflows[index].prompt = remote.prompt
+                } else {
+                    workflows.append(remote)
+                }
+                syncRecords[id] = SyncRecord(serverUpdatedAt: full["updatedAt"].double, dirty: false)
+                changed = true
             }
-            save(); notice = "导入 \(count) 个新工作流；已存在的本地编辑已保留。"
-        } catch { self.error = "同步失败。请安装 Pocket 插件并从桌面导出工作流。\n\(error.localizedDescription)" }
+            for id in WorkflowSync.idsToRemove(records: syncRecords, serverIDs: serverIDs, pendingDeletes: pendingDeletes) {
+                workflows.removeAll { $0.id == id }
+                syncRecords.removeValue(forKey: id)
+                changed = true
+            }
+            if changed { save() }
+            saveSyncState()
+            lastSyncError = nil
+            syncStatus = "已自动同步"
+        } catch { recordSyncError(error) }
+    }
+    private func pushNow() async {
+        guard let api = client, connected, pluginAvailable, !syncing else { return }
+        syncing = true; defer { syncing = false }
+        do {
+            try await flushPendingDeletes(api)
+            guard client === api else { return }
+            try await pushDirty(api)
+            guard client === api else { return }
+            saveSyncState()
+            lastSyncError = nil
+            syncStatus = "已自动同步"
+        } catch { recordSyncError(error) }
+    }
+    private func flushPendingDeletes(_ api: ComfyClient) async throws {
+        for id in pendingDeletes {
+            try await api.remove("pocket/v1/workflows/\(id)")
+            guard client === api else { return }
+            pendingDeletes.remove(id)
+        }
+    }
+    private func pushDirty(_ api: ComfyClient) async throws {
+        let dirtyIDs = workflows.filter { syncRecords[$0.id]?.dirty == true }.map(\.id)
+        for id in dirtyIDs {
+            guard client === api, let index = workflows.firstIndex(where: { $0.id == id }) else { continue }
+            var targetID = id
+            if id.count != 32 || id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) == nil {
+                targetID = Workflow.newID()
+                workflows[index].id = targetID
+                syncRecords.removeValue(forKey: id)
+            }
+            let workflow = workflows[index]
+            let reply = try await api.json("pocket/v1/workflows", method: "POST", body: .object([
+                "id": .string(targetID), "name": .string(workflow.name), "prompt": .object(workflow.prompt)
+            ]))
+            guard client === api else { return }
+            syncRecords[targetID] = SyncRecord(serverUpdatedAt: reply["updatedAt"].double, dirty: false)
+        }
+    }
+    private func recordSyncError(_ error: Error) {
+        syncStatus = "同步暂不可用"
+        let message = error.localizedDescription
+        guard lastSyncError != message else { return }
+        lastSyncError = message
+        notice = "自动同步失败：\(message)"
     }
     func importFile(_ url: URL) {
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -154,8 +296,8 @@ final class PocketStore {
             let data = try Data(contentsOf: url)
             guard data.count < 20_000_000 else { throw PocketError.message("工作流文件不能超过 20 MB。") }
             var workflow = try Workflow.load(data, name: url.deletingPathExtension().lastPathComponent)
-            if workflows.contains(where: { $0.id == workflow.id }) { workflow.id = UUID().uuidString }
-            workflows.append(workflow); save()
+            if workflows.contains(where: { $0.id == workflow.id }) { workflow.id = Workflow.newID() }
+            workflows.append(workflow); save(); touch(workflow.id)
         } catch { self.error = error.localizedDescription }
     }
     var images: [OutputImage] {

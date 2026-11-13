@@ -14,13 +14,13 @@ struct LibraryView: View {
                     ContentUnavailableView {
                         Label("把灵感装进口袋", systemImage: "square.stack.3d.up")
                     } description: {
-                        Text("连接电脑后同步工作流，或导入 API 格式 JSON。参数将自动整理成适合手机的操作面板。")
+                        Text("连接电脑后，服务端与手机上的工作流会自动双向同步；也可以导入 API 格式 JSON。参数将整理成适合手机的操作面板。")
                     } actions: {
                         Button("导入工作流", systemImage: "square.and.arrow.down") { importing = true }.buttonStyle(.glassProminent)
                     }
                 } else {
                     List {
-                        Section { ConnectionBadge() }.listRowBackground(Color.clear)
+                        Section { ConnectionBadge(); SyncBadge() }.listRowBackground(Color.clear)
                         ForEach(store.workflows.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { workflow in
                             NavigationLink(value: workflow.id) {
                                 VStack(alignment: .leading, spacing: 10) {
@@ -33,8 +33,8 @@ struct LibraryView: View {
                                 }.padding(.vertical, 8)
                             }
                             .swipeActions {
-                                Button("删除", role: .destructive) { store.workflows.removeAll { $0.id == workflow.id }; store.save() }
-                                Button("复制") { var copy = workflow; copy.id = UUID().uuidString; copy.name += " 副本"; store.workflows.append(copy); store.save() }.tint(.blue)
+                                Button("删除", role: .destructive) { store.delete(workflow.id) }
+                                Button("复制") { store.duplicate(workflow) }.tint(.blue)
                             }
                         }
                     }.scrollContentBackground(.hidden)
@@ -47,14 +47,13 @@ struct LibraryView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("导入 API JSON", systemImage: "doc.badge.plus") { importing = true }
-                        Button("从电脑同步", systemImage: "arrow.triangle.2.circlepath") { Task { await store.sync() } }.disabled(!store.connected || store.busy)
                     } label: { Image(systemName: "plus") }
                 }
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                 switch result { case .success(let url): store.importFile(url); case .failure(let error): store.error = error.localizedDescription }
             }
-            .refreshable { await store.sync() }
+            .refreshable { await store.syncNow() }
         }
     }
 }
@@ -73,7 +72,7 @@ struct WorkflowEditor: View {
                 let workflow = store.workflows[index]
                 List {
                     Section {
-                        TextField("工作流名称", text: Binding(get: { store.workflows[index].name }, set: { store.workflows[index].name = $0; store.save() }))
+                        TextField("工作流名称", text: Binding(get: { store.workflows[index].name }, set: { store.workflows[index].name = $0; store.save(); store.touch(id) }))
                             .font(.title3.bold())
                         Text("提示词和常用参数优先展示。点击图钉收藏；在“排列”中拖动调整顺序。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -84,7 +83,7 @@ struct WorkflowEditor: View {
                                 Label("\(field.nodeTitle) · \(field.key)", systemImage: "slider.horizontal.3")
                             }.onMove { source, destination in
                                 var order = workflow.fields.map(\.id); order.move(fromOffsets: source, toOffset: destination)
-                                store.workflows[index].pinned = order; store.save()
+                                store.workflows[index].pinned = order; store.save(); store.touch(id)
                             }
                         }.environment(\.editMode, .constant(.active))
                     } else {
@@ -92,7 +91,7 @@ struct WorkflowEditor: View {
                             Section {
                                 ParameterEditor(field: field, schema: store.nodeInfo[field.classType], value: Binding(
                                     get: { store.workflows[index].prompt[field.nodeID]?["inputs"][field.key] ?? field.value },
-                                    set: { store.workflows[index].set(field, value: $0); store.save() }
+                                    set: { store.workflows[index].set(field, value: $0); store.save(); store.touch(id) }
                                 ))
                             } header: {
                                 HStack {
@@ -101,7 +100,7 @@ struct WorkflowEditor: View {
                                     Button {
                                         if workflow.pinned.contains(field.id) { store.workflows[index].pinned.removeAll { $0 == field.id } }
                                         else { store.workflows[index].pinned.append(field.id) }
-                                        store.save()
+                                        store.save(); store.touch(id)
                                     } label: { Image(systemName: workflow.pinned.contains(field.id) ? "pin.fill" : "pin") }
                                         .accessibilityLabel("收藏参数 \(field.key)")
                                 }
