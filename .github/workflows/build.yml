@@ -1,0 +1,174 @@
+name: Build and Release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Optional new release tag, e.g. v0.1.0 (main branch only)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'aiohttp>=3.12,<4' pyyaml
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/package_plugin.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-plugin
+          path: dist/*.zip
+          if-no-files-found: error
+
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache: false
+      - run: python3 scripts/prepare_tailscale.py
+      - run: go mod tidy && go test -race ./...
+        working-directory: native
+      - run: go vet ./...
+        working-directory: native
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: native/go.mod
+          cache: false
+      - name: Prepare project and embedded Tailscale
+        run: |
+          brew install xcodegen
+          python3 scripts/prepare_tailscale.py
+          cd native
+          go mod tidy
+      - name: Build simulator bridge
+        run: bash scripts/build_tunnel.sh iphonesimulator "$(uname -m)"
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Simulator unit and UI tests
+        run: |
+          set -o pipefail
+          device=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if "iOS-26" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild test -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -destination "platform=iOS Simulator,id=$device" -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO | tee build-tests.log | xcbeautify
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: |
+            build/Tests.xcresult
+            build-tests.log
+      - name: Build device bridge
+        run: bash scripts/build_tunnel.sh iphoneos arm64
+      - name: Determine signing mode
+        id: signing
+        env:
+          CERT: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          PROFILE: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+        run: |
+          if [[ -n "$CERT" && -n "$PROFILE" && "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Unsigned archive and IPA
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          set -o pipefail
+          xcodebuild archive -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -configuration Release -destination 'generic/platform=iOS' -archivePath build/Pocket.xcarchive CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" | tee build-device.log | xcbeautify
+          mkdir -p dist/Payload
+          cp -R build/Pocket.xcarchive/Products/Applications/ComfyUIPocket.app dist/Payload/
+          cd dist
+          zip -qry ComfyUIPocket-unsigned.ipa Payload
+      - name: Import signing material
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+          IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+          IOS_EXPORT_METHOD: ${{ vars.IOS_EXPORT_METHOD }}
+        run: bash scripts/sign_export.sh
+      - name: Signed archive and IPA
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+          IOS_SIGNING_IDENTITY: ${{ vars.IOS_SIGNING_IDENTITY }}
+        run: |
+          set -o pipefail
+          xcodebuild archive -project ComfyUIPocket.xcodeproj -scheme ComfyUIPocket -configuration Release -destination 'generic/platform=iOS' -archivePath build/Pocket.xcarchive DEVELOPMENT_TEAM="$POCKET_TEAM" PROVISIONING_PROFILE_SPECIFIER="$POCKET_PROFILE" CODE_SIGN_IDENTITY="${IOS_SIGNING_IDENTITY:-Apple Distribution}" PRODUCT_BUNDLE_IDENTIFIER="${IOS_BUNDLE_ID:-com.xbunax.comfyuipocket}" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" | tee build-device.log | xcbeautify
+          xcodebuild -exportArchive -archivePath build/Pocket.xcarchive -exportPath build/export -exportOptionsPlist "$RUNNER_TEMP/pocket-signing/ExportOptions.plist"
+          mkdir -p dist
+          cp build/export/*.ipa dist/ComfyUIPocket-signed.ipa
+      - name: Clean signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/pocket-signing/build.keychain-db" 2>/dev/null || true
+          if [[ -n "${POCKET_PROFILE:-}" ]]; then rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$POCKET_PROFILE.mobileprovision"; fi
+          rm -rf "$RUNNER_TEMP/pocket-signing"
+      - name: Upload device logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-device-log
+          path: build-device.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist/*.ipa
+          if-no-files-found: error
+
+  release:
+    needs: [server, native, ios]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-ipa
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-plugin
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          tag="${REQUESTED_TAG:-$GITHUB_REF_NAME}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || { echo 'Invalid release tag'; exit 1; }
+          cd dist
+          sha256sum *.ipa *.zip > SHA256SUMS.txt
+          cd ..
+          gh release create "$tag" dist/*.ipa dist/*.zip dist/SHA256SUMS.txt --target "$GITHUB_SHA" --title "ComfyUI Pocket $tag" --notes-file docs/RELEASE_NOTES.md

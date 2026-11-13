@@ -1,0 +1,55 @@
+name: ComfyUIPocket
+options:
+  bundleIdPrefix: com.xbunax
+  deploymentTarget:
+    iOS: '26.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  ComfyUIPocket:
+    type: application
+    platform: iOS
+    sources: [ios/Pocket]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.xbunax.comfyuipocket
+        INFOPLIST_FILE: ios/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: ios/PocketBridge.h
+        LIBRARY_SEARCH_PATHS: '$(inherited) $(PROJECT_DIR)/native'
+        OTHER_LDFLAGS: '$(inherited) -lPocketTunnel -lresolv'
+        CODE_SIGN_STYLE: Manual
+    dependencies:
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: libresolv.tbd
+  PocketTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ios/Tests]
+    dependencies:
+      - target: ComfyUIPocket
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  PocketUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ios/UITests]
+    dependencies:
+      - target: ComfyUIPocket
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ComfyUIPocket:
+    build:
+      targets:
+        ComfyUIPocket: all
+    test:
+      targets: [PocketTests, PocketUITests]
