@@ -133,7 +133,12 @@ struct MobileCanvas: View {
         }
         .background(Color(uiColor: .systemBackground))
         .confirmationDialog("更改当前分组中所有执行节点的状态？", isPresented: Binding(get: { groupMode != nil }, set: { if !$0 { groupMode = nil } }), titleVisibility: .visible) {
-            Button("应用到分组") { if let mode = groupMode { Task { await session.action("groupMode", arguments: ["id": group, "mode": mode]) }; groupMode = nil }
+            Button("应用到分组") {
+                if let mode = groupMode {
+                    Task { await session.action("groupMode", arguments: ["id": group, "mode": mode]) }
+                }
+                groupMode = nil
+            }
         } message: { Text("这会影响生成内容；折叠或切换分组不会改变执行状态。可通过撤销恢复。") }
         .sheet(item: $selected) { node in
             MobileNodeInspector(session: session, nodeID: node.id) { openCustom(node.id); selected = nil }
@@ -298,7 +303,13 @@ private struct MobileWidgetEditor: View {
             default:
                 guard let number = Double(text), number.isFinite else { throw PocketError.message("请输入有效数字。") }
                 // WebKit/ComfyUI widgets use JavaScript numbers; do not silently round large integer edits.
-                if case .integer = widget.value, abs(number) > 9007199254740991 { throw PocketError.message("此数值超过画布可精确编辑的范围，请在工作流参数页修改。") }
+                switch widget.value {
+                case .integer, .unsigned:
+                    guard number.rounded() == number, abs(number) <= 9007199254740991 else {
+                        throw PocketError.message("请输入可精确表示的整数；大种子请在工作流参数页修改。")
+                    }
+                default: break
+                }
                 value = number
             }
             session.mutating = true; defer { session.mutating = false }
