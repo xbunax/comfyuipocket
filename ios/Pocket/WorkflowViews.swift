@@ -360,8 +360,7 @@ struct ParameterEditor: View {
         (schema["input"]["required"].object[field.key] ?? schema["input"]["optional"].object[field.key] ?? .null).array
     }
     private var isPromptField: Bool {
-        let key = field.key.lowercased()
-        return key == "text" || key.contains("prompt")
+        return MobileField.isPrompt(field)
     }
     private var choices: [JSONValue] { InputSchema.choices(descriptor) }
     private var mediaKind: MediaKind? {

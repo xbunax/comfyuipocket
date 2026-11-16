@@ -123,7 +123,7 @@ struct Workflow: Codable, Identifiable, Equatable {
         for nodeID in Array(prompt.keys) {
             guard var node = prompt[nodeID]?.object, var inputs = node["inputs"]?.object else { continue }
             var changed = false
-            for key in Array(inputs.keys) where key.lowercased().contains("seed") {
+            for key in Array(inputs.keys) where (key.lowercased().contains("seed") || MobileField.isSeed(key)) {
                 guard let value = inputs[key] else { continue }
                 switch value {
                 case .integer:
@@ -209,8 +209,8 @@ struct WorkflowResolution {
     let width: WorkflowField
     let height: WorkflowField
     init?(fields: [WorkflowField]) {
-        guard let width = fields.first(where: { $0.key == "width" }),
-              let height = fields.first(where: { $0.key == "height" }),
+        guard let width = fields.first(where: { ["width", "宽度", "custom_width"].contains($0.key) }),
+              let height = fields.first(where: { ["height", "高度", "custom_height"].contains($0.key) }),
               width.nodeID == height.nodeID,
               Self.isNumeric(width.value), Self.isNumeric(height.value) else { return nil }
         self.width = width; self.height = height
@@ -256,7 +256,7 @@ enum InputSchema {
 }
 
 enum WorkflowNodePurpose: String, CaseIterable, Identifiable {
-    case prompts, media, models, sampling, dimensions, outputs, other
+    case prompts, media, models, sampling, dimensions, enhancement, outputs, other
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -265,14 +265,17 @@ enum WorkflowNodePurpose: String, CaseIterable, Identifiable {
         case .models: return "模型与加载"
         case .sampling: return "采样与生成"
         case .dimensions: return "尺寸与潜空间"
+        case .enhancement: return "修脸、超分与补帧"
         case .outputs: return "输出与保存"
         case .other: return "其他节点"
         }
     }
     static func classify(_ fields: [WorkflowField]) -> Self {
         let type = fields.first?.classType.lowercased() ?? ""
+        if ["facerefine", "upscalerife", "h3spatial", "seedvr2"].contains(where: { type.contains($0) }) { return .enhancement }
+        if type.contains("sequentialgenerate") || type.contains("mergegenerate") { return .sampling }
         if type.contains("save") || type.contains("preview") || type.contains("output") { return .outputs }
-        if fields.contains(where: { $0.key == "text" || $0.key.lowercased().contains("prompt") })
+        if fields.contains(where: { MobileField.isPrompt($0) })
             || type.contains("textencode") || type.contains("conditioning") { return .prompts }
         if fields.contains(where: { MediaFile.kind(for: $0) != nil }) { return .media }
         if ["sampler", "scheduler", "sampling", "noise", "guider"].contains(where: { type.contains($0) }) { return .sampling }

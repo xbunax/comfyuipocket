@@ -64,3 +64,37 @@ test('execution node IDs resolve through nested subgraph instances', () => {
   assert.equal(executionNode(graph, '2:4:9'), leaf);
   assert.equal(executionNode(graph, '2:missing:9'), null);
 });
+
+const { mobileScene, setMobileWidget, moveMobileNode } = require('../ios/Pocket/CanvasBridge.js');
+test('mobile scene preserves bypass states, groups and edges while hiding linked/internal widgets', () => {
+  const f = fixture();
+  Object.assign(f.source, {type:'Source',pos:[10,20],size:[280,300],mode:4});
+  Object.assign(f.target, {type:'Target',pos:[30,400],size:[280,100],mode:0});
+  f.graph._groups = [{title:'Generation',pos:[0,0],size:[600,700]}];
+  f.graph.links = {7:{origin_id:1,target_id:2,type:'IMAGE'}};
+  f.target.inputs[0].link=7;
+  f.source.widgets.push({name:'timeline_data',value:'{}'}, {name:'linked',value:'do not edit'});
+  f.source.inputs.push({widget:{name:'linked'},link:8});
+  const scene=mobileScene(f.app);
+  assert.equal(scene.nodes[0].mode,4); assert.equal(scene.nodes[0].group,'0');
+  assert.deepEqual(scene.nodes[0].widgets.map(w=>w.name),['width']);
+  assert.equal(scene.links[0].from,'1'); assert.equal(scene.links[0].to,'2');
+});
+test('mobile widget validation invokes custom callbacks and records asynchronous changes', async () => {
+  const f=fixture(); let called=false;
+  f.source.widgets[0].options={min:64,max:2048};
+  f.source.widgets[0].callback=async ()=>{await Promise.resolve(); called=true;};
+  await assert.rejects(setMobileWidget(f.app,'1','0',4096),/范围/);
+  await setMobileWidget(f.app,'1','0',1024);
+  assert.equal(called,true); assert.equal(f.source.widgets[0].value,1024);
+  assert.deepEqual(f.transactions(),[1,1]);
+  f.source.inputs.push({widget:{name:'width'},link:8});
+  await assert.rejects(setMobileWidget(f.app,'1','0',512),/上游/);
+});
+test('node movement edits only geometry and participates in undo transactions', () => {
+  const f=fixture(); f.source.pos=[1,2];
+  moveMobileNode(f.app,'1',30,40);
+  assert.deepEqual(f.source.pos,[30,40]); assert.equal(f.source.widgets[0].value,512);
+  assert.throws(()=>moveMobileNode(f.app,'1',NaN,40));
+  assert.deepEqual(f.transactions(),[1,1]);
+});

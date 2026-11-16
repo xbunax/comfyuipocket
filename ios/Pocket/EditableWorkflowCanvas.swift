@@ -7,6 +7,7 @@ struct WorkflowCanvasView: View {
     @Environment(PocketStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var session = CanvasSession()
+    @State private var customControls = false
     @State private var showNodes = false
     @State private var showPorts = false
     @State private var working = false
@@ -20,8 +21,16 @@ struct WorkflowCanvasView: View {
                 if store.connected, let api = store.client, let workflow {
                     ZStack {
                         CanvasWebView(session: session)
+                            .opacity(customControls ? 1 : 0.01)
+                            .allowsHitTesting(customControls)
+                        if !customControls, session.loaded {
+                            MobileCanvas(session: session) { id in
+                                customControls = true
+                                Task { await session.action("focus", arguments: ["id": id]) }
+                            }
+                        }
                         if session.loading {
-                            ProgressView("正在启动完整画布…").padding(20).background(.regularMaterial, in: .rect(cornerRadius: 18))
+                            ProgressView("正在准备节点与画布…").padding(20).background(.regularMaterial, in: .rect(cornerRadius: 18))
                         }
                     }
                     .task(id: api.baseURL) {
@@ -30,7 +39,9 @@ struct WorkflowCanvasView: View {
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
                             guard !Task.isCancelled else { return }
-                            if session.loaded, !working { _ = await save() }
+                            if session.loaded, !working, !session.mutating {
+                                await session.refreshScene(); _ = await save()
+                            }
                         }
                     }
                     .safeAreaInset(edge: .bottom, spacing: 0) { controls }
@@ -98,13 +109,23 @@ struct WorkflowCanvasView: View {
     }
     private var controls: some View {
         VStack(spacing: 8) {
+            HStack {
+                Label(customControls ? "插件专用控件" : "触屏画布", systemImage: customControls ? "rectangle.and.hand.point.up.left" : "hand.point.up.left")
+                Spacer()
+                Button(customControls ? "返回触屏画布" : "专用控件") {
+                    customControls.toggle()
+                    Task { await session.refreshScene() }
+                }
+            }.font(.caption).padding(.horizontal, 16).padding(.top, 8)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     Button("新增节点", systemImage: "plus") { showNodes = true }.accessibilityIdentifier("canvas.addNode")
                     Button("连接端口", systemImage: "point.3.connected.trianglepath.dotted") { showPorts = true }.accessibilityIdentifier("canvas.connect")
+                    if customControls {
                     Button("适合屏幕", systemImage: "arrow.up.left.and.arrow.down.right") { Task { await session.action("fit") } }
                     Button("缩小", systemImage: "minus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 0.75]) } }.labelStyle(.iconOnly)
                     Button("放大", systemImage: "plus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 1.33]) } }.labelStyle(.iconOnly)
+                    }
                 }.font(.subheadline).buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 8)
             }.disabled(!session.loaded || working)
             HStack {
@@ -123,7 +144,7 @@ struct WorkflowCanvasView: View {
     }
     private func command(_ name: String) { Task { await session.action("command", arguments: ["name": name]) } }
     @discardableResult private func save() async -> Bool {
-        guard !working else { return false }
+        guard !working, !session.mutating else { return false }
         working = true; defer { working = false }
         do {
             let text = try await session.snapshot()
@@ -140,6 +161,8 @@ struct WorkflowCanvasView: View {
 
 @MainActor @Observable
 final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
+    var scene = MobileCanvasScene()
+    var mutating = false
     var loading = true
     var loaded = false
     var error: String?
@@ -182,6 +205,14 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func call(_ method: String, arguments: [String: Any] = [:]) async throws -> Any {
         guard let webView else { throw PocketError.message("画布尚未启动。") }
         let scripts: [String: String] = [
+            "scene": "return window.PocketCanvas.scene();",
+            "widget": "return await window.PocketCanvas.widget(id, index, value);",
+            "moveNode": "return window.PocketCanvas.moveNode(id, x, y);",
+            "removeNode": "return window.PocketCanvas.removeNode(id);",
+            "groupMode": "return window.PocketCanvas.groupMode(id, mode);",
+            "nodeMode": "return window.PocketCanvas.nodeMode(id, mode);",
+            "focus": "return window.PocketCanvas.focus(id);",
+            "subgraph": "return window.PocketCanvas.subgraph(id);",
             "snapshot": "return await window.PocketCanvas.snapshot();", "load": "return await window.PocketCanvas.load(text);",
             "rebuild": "return await window.PocketCanvas.rebuild(name);", "command": "return await window.PocketCanvas.command(name);",
             "fit": "return window.PocketCanvas.fit();", "zoom": "return window.PocketCanvas.zoom(factor);",
@@ -197,11 +228,21 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         return text
     }
     func action(_ name: String, arguments: [String: Any] = [:]) async {
-        do { _ = try await call(name, arguments: arguments) }
+        do {
+            _ = try await call(name, arguments: arguments)
+            if loaded { await refreshScene() }
+        }
         catch {
             if name == "load" || name == "rebuild" { loading = false }
             self.error = error.localizedDescription
         }
+    }
+    func refreshScene() async {
+        do {
+            if let text = try await call("scene") as? String {
+                scene = try JSONDecoder().decode(MobileCanvasScene.self, from: Data(text.utf8))
+            }
+        } catch { self.error = error.localizedDescription }
     }
     private func trusted(_ url: URL?) -> Bool {
         guard let url, let baseURL else { return false }
@@ -211,7 +252,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let body = message.body as? [String: Any] else { return }
         switch body["type"] as? String {
         case "ready": Task { await action("load", arguments: ["text": initialText]) }
-        case "loaded": loading = false; loaded = true; mismatch = nil
+        case "loaded": loading = false; loaded = true; mismatch = nil; Task { await refreshScene() }
         case "mismatch": loading = false; loaded = false; mismatch = body["message"] as? String
         case "error": loading = false; error = body["message"] as? String
         default: break

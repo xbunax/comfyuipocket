@@ -1,21 +1,23 @@
-ComfyUI Pocket v0.8.1
+ComfyUI Pocket v0.9.0
 
-- Canvas mode now opens the actual ComfyUI editor inside the app. Add and delete
-  nodes, move and resize them, edit all server-provided widgets, connect ports,
-  use groups/subgraphs, and copy/paste or undo/redo through the editor commands.
-- Mobile tools provide a searchable node library, input/output port selection,
-  disconnect, fit/zoom, export, save and run. Existing ComfyUI menus remain available.
-- Canvas snapshots save the layout and executable API prompt together, autosave
-  on the phone, and sync through Pocket. Running uses Pocket's existing task tracking.
-- API-only workflows can be reconstructed into editable canvases by ComfyUI.
-  Parameter/layout mismatches require an explicit rebuild with a preserved copy.
-  Empty canvases can be saved as drafts. Unchanged 64-bit seeds remain intact.
-- Background sync protects the active editor. Embedded pages do not scan unrelated
-  desktop workflows. Sync keeps newer local edits made while an upload is in flight.
-- Device builds use the Intel macOS runner pool after the ARM runners remained
-  queued waiting for a hosted machine. No simulator is required for IPA delivery.
+- Touch canvas is now drawn by the native iOS interface: readable compact cards,
+  original-layout mode, group navigation, node search, pan/pinch zoom, node parameter
+  sheets, movement in original-layout mode, and explicit node/group execution states.
+  Compact arrangement is a view preference and never rewrites the original graph.
+- ComfyUI remains the graph execution/serialization engine. Specialized plugin
+  controls are available separately; add/connect/disconnect, undo/redo, save and run
+  continue to operate on the same graph. Node deletion also removes its connections.
+- Common/all parameter modes reduce clutter. Chinese prompt, seed and dimension
+  fields are recognized. LoRA slots are grouped, and face refinement/upscale/frame
+  interpolation have their own section. Existing prompt block editing is preserved.
+- K2/Qwen reference images have previews, local/photo/gallery selection, ordering
+  and deletion. Existing masks and extension metadata survive reordering.
+- H3 contiguous text storyboards have prompt cards, frame duration, add/reorder/delete,
+  synchronized derived inputs and inactive track preservation. Complex media/audio,
+  retakes, gaps and trimmed timelines use the dedicated plugin control.
+- H3 named properties are restored before graph configuration so the plugin's cached
+  editor matches mobile edits. Frame-equivalent second rounding no longer prevents
+  opening the canvas. Unrecognized custom serializers still report mismatches.
 
-Update the server plugin to v0.6.0 for embedded-editor sync isolation and empty
-canvas drafts. Other editor operations use ComfyUI's own frontend.
-Device IPA testing is performed by the user; simulator UI tests are optional.
-Sign ComfyUIPocket-unsigned.ipa before installing. SHA256SUMS.txt checks all assets.
+Requires the existing Pocket server plugin v0.6.0; no reinstall is needed for this update.
+No simulator tests are run. Sign the unsigned IPA and test touch interactions on device.
