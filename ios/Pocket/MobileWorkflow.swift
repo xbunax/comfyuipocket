@@ -14,6 +14,8 @@ enum MobileField {
     }
     static func isInternal(_ field: WorkflowField) -> Bool {
         guard field.classType.hasPrefix("Lazy") else { return false }
+        // The director's mode button swaps track banks, not just this scalar value.
+        if field.classType == "LazyH3Director", field.key == "workspace_mode" { return true }
         return ["timeline_ui", "local_prompts", "segment_lengths", "guide_strength", "transition_smoothness"].contains(field.key)
     }
     static func isCommon(_ field: WorkflowField) -> Bool {
@@ -69,7 +71,9 @@ struct H3Storyboard {
               (root["audioSegments"]?.array ?? []).isEmpty, (root["motionSegments"]?.array ?? []).isEmpty else { return false }
         var end = 0.0
         for s in segments {
-            guard s["type"].text == "text", s["start"].double == end, s["length"].double > 0 else { return false }
+            guard s["type"].text == "text", s["start"].double == end,
+                  s["length"].double >= 1, s["length"].double <= 100000,
+                  s["length"].double.rounded() == s["length"].double else { return false }
             end += s["length"].double
         }
         return !segments.isEmpty
