@@ -132,6 +132,7 @@ final class PocketStore {
     func mergeMedia(_ history: JSONValue, server: String) throws {
         var archive = mediaArchives[server] ?? MediaArchive()
         archive.ingest(history)
+        archive.rememberTasks(generationTasks.filter { $0.server == server })
         if archive != mediaArchives[server] {
             mediaArchives[server] = archive
             try persistMediaArchives()

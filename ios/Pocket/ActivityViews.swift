@@ -334,51 +334,91 @@ struct GalleryView: View {
     @Environment(PocketStore.self) private var store
     @State private var selected: OutputImage?
     @State private var removing: OutputImage?
+    @State private var expanded: Set<String> = []
+    private var groups: [MediaTaskGroup] {
+        var archive = store.currentMediaArchive
+        archive.rememberTasks(store.currentGenerationTasks)
+        return archive.galleryGroups
+    }
     var body: some View {
         NavigationStack {
             ZStack {
                 PocketBackground()
-                if store.images.isEmpty {
-                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("连接服务器后自动收集作品。删除任务记录后，已收集的作品仍会保留。"))
+                if groups.isEmpty {
+                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
                 } else {
                     ScrollView {
                         HStack {
-                            Text("\(store.images.count) 件作品").font(.subheadline.weight(.medium))
+                            Text("\(groups.count) 个任务 · \(groups.reduce(0) { $0 + $1.outputs.count }) 件作品").font(.subheadline.weight(.medium))
                             Spacer()
-                            Text("最新生成在前").font(.caption).foregroundStyle(.secondary)
+                            Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
                         }.padding(.horizontal, 20).padding(.top, 8)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-                            ForEach(store.images) { image in
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Button { selected = image } label: {
-                                        RemoteImage(output: image).frame(height: 180).clipped()
-                                    }.buttonStyle(.plain)
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(image.filename).font(.caption.weight(.medium)).lineLimit(1).foregroundStyle(.primary)
-                                            Text(image.isVideo ? "视频" : "图片").font(.caption2).foregroundStyle(.secondary)
-                                        }
-                                        Spacer(minLength: 0)
-                                        Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
-                                            .labelStyle(.iconOnly).buttonStyle(.borderless)
-                                            .disabled(store.deletingOutputs.contains(image.id))
-                                    }.padding(12)
-                                }
-                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
-                                .clipShape(.rect(cornerRadius: 20))
-                                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.04)))
-                                .contextMenu {
-                                    Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
-                                }
+                        LazyVStack(spacing: 14) {
+                            ForEach(groups) { group in
+                                GalleryTaskCard(group: group, expanded: Binding(get: { expanded.contains(group.id) }, set: {
+                                    if $0 { expanded.insert(group.id) } else { expanded.remove(group.id) }
+                                }), selected: $selected, removing: $removing)
                             }
-                        }.padding()
+                        }.padding(16)
                     }.refreshable { await store.refresh() }
                 }
             }.navigationTitle("作品")
                 .toolbar { Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh() } }.disabled(!store.connected) }
                 .sheet(item: $selected) { ImageDetail(output: $0) }
                 .workDeletionDialog($removing)
+                .onChange(of: store.client?.baseURL) { _, _ in expanded.removeAll() }
         }
+    }
+}
+
+private struct GalleryTaskCard: View {
+    @Environment(PocketStore.self) private var store
+    let group: MediaTaskGroup
+    @Binding var expanded: Bool
+    @Binding var selected: OutputImage?
+    @Binding var removing: OutputImage?
+    var body: some View {
+        VStack(spacing: 0) {
+            Button {
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 12) {
+                    if let cover = group.outputs.first {
+                        RemoteImage(output: cover).frame(width: 64, height: 72).clipped().clipShape(.rect(cornerRadius: 12))
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(.primary)
+                        Text(group.summary).font(.caption).foregroundStyle(.secondary)
+                        Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        if group.createdAt > 1_000_000_000 {
+                            Text(Date(timeIntervalSince1970: group.createdAt), format: .dateTime.month().day().hour().minute())
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }.padding(14).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityValue(expanded ? "已展开" : "已折叠")
+                .contextMenu { Button("复制任务 ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = group.taskID } }
+            if expanded {
+                Divider().padding(.horizontal, 14)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
+                    ForEach(group.outputs) { image in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Button { selected = image } label: {
+                                RemoteImage(output: image).frame(height: 150).clipped().clipShape(.rect(cornerRadius: 12))
+                            }.buttonStyle(.plain)
+                            HStack {
+                                Text(image.filename).font(.caption2).lineLimit(1).foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
+                                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.id))
+                            }
+                        }.contextMenu { Button("删除作品", systemImage: "trash", role: .destructive) { removing = image } }
+                    }
+                }.padding(14)
+            }
+        }.background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.05)))
     }
 }
 

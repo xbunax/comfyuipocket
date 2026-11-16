@@ -6,6 +6,37 @@ import XCTest
 #endif
 
 final class MobileWorkflowTests: XCTestCase {
+    func testGalleryGroupsBatchImagesAndVideosAndSurvivesTaskDeletion() throws {
+        var archive = MediaArchive()
+        archive.outputs = [
+            OutputImage(promptID: "p2", filename: "b.mp4", subfolder: "", type: "output"),
+            OutputImage(promptID: "p1", filename: "a.png", subfolder: "", type: "output"),
+            OutputImage(promptID: "external", filename: "a.png", subfolder: "", type: "output")
+        ]
+        let task = GenerationTask(id: "batch", server: "server", workflowID: "w", name: "Video", createdAt: 100,
+            requestedCount: 2, items: [GenerationItem(id: "p1", prompt: [:]), GenerationItem(id: "p2", prompt: [:])])
+        archive.rememberTasks([task])
+        archive.deletedTaskIDs.insert("batch")
+        archive.deletedPromptIDs.formUnion(["p1", "p2"])
+        let restored = try JSONDecoder().decode(MediaArchive.self, from: JSONEncoder().encode(archive))
+        let groups = restored.galleryGroups
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].taskID, "batch")
+        XCTAssertEqual(groups[0].outputs.count, 2)
+        XCTAssertEqual(groups[0].videoCount, 1)
+        XCTAssertEqual(groups[1].taskID, "external")
+        archive.remove(archive.outputs[0])
+        XCTAssertEqual(archive.galleryGroups[0].outputs.count, 1)
+    }
+    func testGalleryLegacyArchiveAndServerBatchMetadata() throws {
+        let legacy = #"{"outputs":[],"removedOutputIDs":[],"deletedTaskIDs":[],"deletedPromptIDs":[],"generationOrder":{}}"#
+        var archive = try JSONDecoder().decode(MediaArchive.self, from: Data(legacy.utf8))
+        XCTAssertNil(archive.taskMetadata)
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p":{"prompt":[1,"p",{}, {"pocket_task":{"id":"batch","name":"Example","created_at":100}}],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))
+        archive.ingest(history)
+        XCTAssertEqual(archive.galleryGroups.first?.taskID, "batch")
+        XCTAssertEqual(archive.galleryGroups.first?.name, "Example")
+    }
     func testChineseFieldsPreserveLinksAndRandomizeActualSeedsOnly() throws {
         var workflow = try Workflow.load(Data(#"{"1":{"class_type":"LazyMergeGenerate","inputs":{"种子":12,"随机种子":true,"宽度":1024,"高度":768,"model":["2",0]}},"2":{"class_type":"LazyMergeWorkbench","inputs":{"提示词文本":"hello","图片数据":"[]"}}}"#.utf8), name: "Custom")
         let linked = workflow.prompt["1"]?["inputs"]["model"]

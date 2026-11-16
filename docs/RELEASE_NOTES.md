@@ -19,5 +19,9 @@ ComfyUI Pocket v0.9.0
   editor matches mobile edits. Frame-equivalent second rounding no longer prevents
   opening the canvas. Unrecognized custom serializers still report mismatches.
 
+- Gallery groups images and videos by task ID and starts collapsed. Batch results
+  share one card with a cover, counts, timestamp and expandable previews. Task
+  metadata is archived so removing task history does not split saved batch works.
+
 Requires the existing Pocket server plugin v0.6.0; no reinstall is needed for this update.
 No simulator tests are run. Sign the unsigned IPA and test touch interactions on device.
