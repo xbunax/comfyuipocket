@@ -8,12 +8,20 @@ struct MediaArchive: Codable, Equatable {
     var generationOrder: [String: Double] = [:]
     // Optional for archives written before task grouping was introduced.
     var taskMetadata: [String: MediaTaskMetadata]? = nil
+    var provenance: [String: MediaProvenance]? = nil
 
     mutating func ingest(_ history: JSONValue) {
         for (id, entry) in history.object {
             let prompt = entry["prompt"].array
             let created = prompt.count > 3 ? prompt[3]["create_time"].double : 0
             generationOrder[id] = created > 0 ? created : (prompt.first?.double ?? 0)
+            if prompt.count > 2, !prompt[2].object.isEmpty {
+                let meta = prompt.count > 3 ? prompt[3]["pocket_task"] : .null
+                let record = MediaProvenance(prompt: prompt[2].object, workflowID: meta["workflow_id"].text,
+                    workflowName: meta["name"].text, taskID: meta["id"].text.nonEmpty ?? id,
+                    createdAt: meta["created_at"].double > 0 ? meta["created_at"].double : (created > 100_000_000_000 ? created / 1000 : created))
+                if provenance == nil { provenance = [:] }; provenance?[id] = record
+            }
             if prompt.count > 3 {
                 let meta = prompt[3]["pocket_task"]
                 if !meta["id"].text.isEmpty {
@@ -47,6 +55,11 @@ struct MediaArchive: Codable, Equatable {
             for item in task.items {
                 if taskMetadata == nil { taskMetadata = [:] }
                 taskMetadata?[item.id] = MediaTaskMetadata(id: task.id, name: task.name, createdAt: task.createdAt)
+                if !item.prompt.isEmpty {
+                    if provenance == nil { provenance = [:] }
+                    provenance?[item.id] = MediaProvenance(prompt: item.prompt, workflowID: task.workflowID,
+                        workflowName: task.name, taskID: task.id, createdAt: task.createdAt)
+                }
             }
         }
     }
@@ -75,6 +88,45 @@ struct MediaArchive: Codable, Equatable {
     }
     func visibleHistory(_ history: JSONValue) -> JSONValue {
         .object(history.object.filter { !deletedPromptIDs.contains($0.key) })
+    }
+}
+
+struct MediaProvenance: Codable, Equatable {
+    var prompt: [String: JSONValue]
+    var workflowID: String
+    var workflowName: String
+    var taskID: String
+    var createdAt: Double
+    var workflow: Workflow { Workflow(id: workflowID, name: workflowName, prompt: prompt) }
+    var promptFields: [WorkflowField] {
+        workflow.fields.filter { MobileField.isPrompt($0) || $0.key == "local_prompts" }
+    }
+    var parameterFields: [WorkflowField] {
+        workflow.fields.filter { !MobileField.isPrompt($0) && $0.key != "local_prompts" && !["timeline_data", "图片数据", "history_json", "timeline_ui"].contains($0.key) }
+    }
+    /// ComfyUI's standard SaveImage writes the executed prompt into a PNG tEXt chunk.
+    /// Read it only when task history is unavailable; never infer prompts from the current workflow.
+    static func embeddedPNG(_ data: Data) -> MediaProvenance? {
+        guard data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) else { return nil }
+        var offset = 8
+        while offset <= data.count - 12 {
+            let length = (0..<4).reduce(0) { ($0 << 8) | Int(data[offset + $1]) }
+            guard length <= data.count - offset - 12 else { return nil }
+            if data[offset + 4..<offset + 8].elementsEqual([116, 69, 88, 116]), length <= 20 * 1024 * 1024 {
+                let payload = data.subdata(in: offset + 8..<offset + 8 + length)
+                if let separator = payload.firstIndex(of: 0), String(data: payload.prefix(upTo: separator), encoding: .utf8) == "prompt",
+                   let value = try? JSONDecoder().decode(JSONValue.self, from: payload.suffix(from: separator + 1)),
+                   case .object(let prompt) = value, !prompt.isEmpty,
+                   prompt.values.allSatisfy({ node in
+                       guard !node["class_type"].text.isEmpty, case .object = node["inputs"] else { return false }
+                       return true
+                   }) {
+                    return MediaProvenance(prompt: prompt, workflowID: "", workflowName: "", taskID: "", createdAt: 0)
+                }
+            }
+            offset += length + 12
+        }
+        return nil
     }
 }
 

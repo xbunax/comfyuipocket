@@ -14,6 +14,12 @@ ComfyUI Pocket v0.9.1
   widget initialization and executed node modes from the saved API prompt. Widget
   edits resolve by name so dynamic plugin controls cannot shift an indexed edit.
 
+- Artwork details show actual image/video resolution, file size, video duration and
+  frame rate, submitted prompts, workflow name/ID, task IDs and generation parameters.
+  Execution snapshots are archived with the works, including after task deletion.
+  Standard PNG prompt metadata is used when historical records are unavailable.
+- Image previews support pinch zoom, panning and double-tap zoom/reset.
+
 Existing server plugin v0.6.0 is compatible; no reinstall is needed.
 No simulator tests are run. Sign the unsigned IPA before installing; touch behavior
 and final layout should be verified on the physical iPhone.

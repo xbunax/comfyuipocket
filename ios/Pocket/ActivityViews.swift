@@ -459,15 +459,24 @@ struct ImageDetail: View {
     @State private var status = ""
     @State private var player: AVPlayer?
     @State private var removing: OutputImage?
+    @State private var showDetails = false
+    @State private var fileInfo = ArtworkFileInfo()
+    @State private var record: MediaProvenance?
     var body: some View {
         NavigationStack {
             VStack {
                 Spacer()
                 if let player { VideoPlayer(player: player) }
-                else if let image { Image(uiImage: image).resizable().scaledToFit() }
+                else if let image { ZoomableArtwork(image: image).frame(maxWidth: .infinity, maxHeight: .infinity) }
                 else if status.isEmpty { ProgressView() }
                 Spacer()
-                Text(output.filename).font(.caption).textSelection(.enabled)
+                Text(output.filename).font(.caption).textSelection(.enabled).lineLimit(2)
+                HStack(spacing: 12) {
+                    if let resolution = fileInfo.resolution { Text(resolution).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+                    if !output.isVideo { Text("双指缩放 · 双击放大").font(.caption2).foregroundStyle(.secondary) }
+                    Spacer()
+                    Button("详情", systemImage: "info.circle") { showDetails = true }.font(.subheadline)
+                }.padding(.horizontal, 16)
                 HStack {
                     Button("保存到照片", systemImage: "square.and.arrow.down") {
                         Task {
@@ -494,15 +503,29 @@ struct ImageDetail: View {
                     }
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
                 }
+                .sheet(isPresented: $showDetails) { ArtworkDetails(output: output, file: fileInfo, record: record) }
                 .workDeletionDialog($removing, onDeleted: { dismiss() })
                 .task {
                     do {
-                        guard let file = try await store.client?.download(output) else { return }
+                        guard let api = store.client else { return }
+                        var archive = store.currentMediaArchive
+                        archive.rememberTasks(store.currentGenerationTasks)
+                        record = archive.provenance?[output.promptID]
+                        let file = try await api.download(output)
+                        guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return }
                         shareURL = file
+                        fileInfo = await ArtworkFileInfo.read(file, video: output.isVideo)
+                        guard !Task.isCancelled else { return }
+                        if record == nil, !output.isVideo, let data = try? Data(contentsOf: file) {
+                            record = MediaProvenance.embeddedPNG(data)
+                        }
                         if output.isVideo {
                             player = AVPlayer(url: file)
                             if URL(fileURLWithPath: output.filename).pathExtension.lowercased() == "webm" { status = "系统可能无法播放 WebM，可使用分享在其他应用中打开。" }
-                        } else { image = UIImage(contentsOfFile: file.path) }
+                        } else {
+                            image = UIImage(contentsOfFile: file.path)
+                            if image == nil { status = "无法解码图片，可通过分享在其他应用中打开。" }
+                        }
                     } catch { status = error.localizedDescription }
                 }
                 .onDisappear { player?.pause(); if let shareURL { try? FileManager.default.removeItem(at: shareURL) } }

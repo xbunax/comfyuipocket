@@ -6,6 +6,31 @@ import XCTest
 #endif
 
 final class MobileWorkflowTests: XCTestCase {
+    func testArtworkDetailsKeepSubmittedPromptAfterHistoryAndTaskRemoval() throws {
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p":{"prompt":[1,"p",{"3":{"class_type":"LazyMergeWorkbench","inputs":{"提示词文本":"original prompt"}},"4":{"class_type":"Size","inputs":{"width":1024,"height":768,"seed":18446744073709551615}}},{"pocket_task":{"id":"batch","name":"K2 Workbench","workflow_id":"workflow-a","created_at":1700000000}}],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))
+        var archive = MediaArchive(); archive.ingest(history)
+        archive.deletedTaskIDs.insert("batch"); archive.deletedPromptIDs.insert("p")
+        archive.ingest(.object([:]))
+        let saved = try JSONDecoder().decode(MediaArchive.self, from: JSONEncoder().encode(archive))
+        let record = try XCTUnwrap(saved.provenance?["p"])
+        XCTAssertEqual(record.workflowID, "workflow-a")
+        XCTAssertEqual(record.workflowName, "K2 Workbench")
+        XCTAssertEqual(record.promptFields.first?.value, .string("original prompt"))
+        XCTAssertEqual(record.prompt["4"]?["inputs"]["seed"], .unsigned(UInt64.max))
+        XCTAssertEqual(saved.galleryGroups.first?.outputs.count, 1)
+    }
+    func testPNGFallbackReadsOnlyStructuredPromptAndRejectsTruncatedMetadata() throws {
+        let prompt = #"{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"saved image prompt"}}}"#
+        let payload = Data(("prompt\0" + prompt).utf8)
+        let n = UInt32(payload.count)
+        var data = Data([137, 80, 78, 71, 13, 10, 26, 10, UInt8((n >> 24) & 255), UInt8((n >> 16) & 255), UInt8((n >> 8) & 255), UInt8(n & 255)])
+        data.append(Data("tEXt".utf8)); data.append(payload); data.append(Data(repeating: 0, count: 4))
+        let record = try XCTUnwrap(MediaProvenance.embeddedPNG(data))
+        XCTAssertEqual(record.promptFields.first?.value, .string("saved image prompt"))
+        XCTAssertTrue(record.workflowName.isEmpty)
+        XCTAssertNil(MediaProvenance.embeddedPNG(Data(data.dropLast(5))))
+        XCTAssertNil(MediaProvenance.embeddedPNG(Data("not a PNG".utf8)))
+    }
     func testGalleryGroupsBatchImagesAndVideosAndSurvivesTaskDeletion() throws {
         var archive = MediaArchive()
         archive.outputs = [
