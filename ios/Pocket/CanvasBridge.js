@@ -18,8 +18,7 @@
   }
 
   async function applyPrompt(app, prompt) {
-    const before = (await app.graphToPrompt(app.rootGraph)).output;
-    const unmapped = [];
+    const before = await executablePrompt(app, prompt);
     for (const [id, spec] of Object.entries(prompt)) {
       for (const [name, value] of Object.entries(spec.inputs)) {
         if (equivalentInput(spec, before?.[id], name)) continue;
@@ -27,15 +26,18 @@
         // Only actual widgets are assigned. Connections, dynamic structures and
         // custom serializers are never inferred from widget position.
         const widget = node?.widgets?.find(item => item.name === name);
-        if (!widget || (value !== null && typeof value === "object")) {
-          unmapped.push(`${id}.${name}`); continue;
-        }
+        if (!widget || (value !== null && typeof value === "object")) continue;
+        // Never replace a connected input through a stale widget.
+        if (node.inputs?.some(input => input.link != null && (input.name === name || input.widget?.name === name))) continue;
         widget.value = value;
+        node.onWidgetChanged?.(name, value, before?.[id]?.inputs?.[name], widget);
         await widget.callback?.(value, app.canvas, node, undefined, undefined);
       }
     }
-    const after = (await app.graphToPrompt(app.rootGraph)).output;
+    const after = await executablePrompt(app, prompt);
+    const unmapped = [];
     for (const [id, spec] of Object.entries(prompt)) {
+      if (after[id]?.class_type !== spec.class_type) { unmapped.push(`${id}.class_type`); continue; }
       for (const [name, value] of Object.entries(spec.inputs)) {
         if (!equivalentInput(spec, after?.[id], name)) {
           if (!unmapped.includes(`${id}.${name}`)) unmapped.push(`${id}.${name}`);
@@ -45,9 +47,38 @@
     return unmapped;
   }
 
+  async function executablePrompt(app, reference) {
+    const { output } = await app.graphToPrompt(app.rootGraph);
+    for (const [id, spec] of Object.entries(reference ?? {})) {
+      const actual = output[id], node = executionNode(app.rootGraph, id);
+      if (!actual || actual.class_type !== spec.class_type || !node) continue;
+      for (const name of Object.keys(spec.inputs)) {
+        if (Object.hasOwn(actual.inputs, name)) continue;
+        const widget = node.widgets?.find(w => w.name === name);
+        // Some frontend versions omit hidden widgets from the API prompt. A real,
+        // named scalar widget remains authoritative even when the plugin folds it.
+        if (!widget || !(widget.hidden || widget.type === "hidden") || widget.options?.serialize === false) continue;
+        if (!["string", "number", "boolean"].includes(typeof widget.value)) continue;
+        if (node.inputs?.some(i => i.link != null && (i.name === name || i.widget?.name === name))) continue;
+        actual.inputs[name] = widget.value;
+      }
+    }
+    return output;
+  }
+
+  function sameValue(a, b) {
+    if (a === b) return true;
+    if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every(k => Object.hasOwn(b, k) && sameValue(a[k], b[k]));
+  }
+
   function equivalentInput(expected, actual, name) {
     const a = expected.inputs[name], b = actual?.inputs?.[name];
-    if (JSON.stringify(a) === JSON.stringify(b)) return true;
+    if (sameValue(a, b)) return true;
+    if (expected.class_type?.startsWith("Lazy") && ["timeline_data", "图片数据"].includes(name) && typeof a === "string" && typeof b === "string") {
+      try { if (sameValue(JSON.parse(a), JSON.parse(b))) return true; } catch {}
+    }
     // H3 versions display seconds at two or three decimal places. Frames remain authoritative.
     const frameKey = { start_second: "start_frame", end_second: "end_frame", duration_seconds: "duration_frames" }[name];
     if (expected.class_type === "LazyH3Director" && frameKey && typeof a === "number" && typeof b === "number") {
@@ -133,9 +164,9 @@
     return { nodes, groups, links, nested: graph !== app.rootGraph };
   }
 
-  async function setMobileWidget(app, id, index, value) {
+  async function setMobileWidget(app, id, index, value, name) {
     const node = nodeAt(app.canvas.graph ?? app.rootGraph, id);
-    const widget = node?.widgets?.[Number(index)];
+    const widget = name ? node?.widgets?.find(w => w.name === name) : node?.widgets?.[Number(index)];
     if (!widget || !["string", "number", "boolean"].includes(typeof value) || typeof widget.value !== typeof value) throw new Error("控件类型已改变，请重新打开节点。");
     if (node.inputs?.some(i => i.link != null && i.widget?.name === widget.name)) throw new Error("此参数已连接输入，请编辑上游节点。");
     if (typeof value === "number" && (!Number.isFinite(value) || value < (widget.options?.min ?? -Infinity) || value > (widget.options?.max ?? Infinity))) throw new Error("数值超出节点范围。");
@@ -161,9 +192,31 @@
     return change(app, () => { node.pos[0] = x; node.pos[1] = y; return true; });
   }
 
+  function focusNode(app, id) {
+    const node = nodeAt(app.canvas.graph, id);
+    if (!node) throw new Error("节点不存在。");
+    const canvas = app.canvas, rect = canvas.canvas.getBoundingClientRect();
+    const title = 32, padding = 20;
+    const width = Math.max(1, node.size?.[0] ?? 280), height = Math.max(1, (node.size?.[1] ?? 100) + title);
+    canvas.selectNode(node);
+    canvas.ds.scale = Math.max(0.02, Math.min(4, (rect.width - padding * 2) / width, (rect.height - padding * 2) / height));
+    canvas.ds.offset[0] = -node.pos[0] + (rect.width / canvas.ds.scale - width) / 2;
+    canvas.ds.offset[1] = -node.pos[1] + title + (rect.height / canvas.ds.scale - height) / 2;
+    canvas.setDirty(true, true); return true;
+  }
+
+  function restoreExecutionModes(app, prompt) {
+    for (const [id, spec] of Object.entries(prompt)) {
+      const node = executionNode(app.rootGraph, id);
+      // The saved API prompt is authoritative about which concrete nodes execute.
+      // Never activate annotations, virtual nodes, or a different node class.
+      if (node?.type === spec.class_type && (node.mode === 2 || node.mode === 4)) node.mode = 0;
+    }
+  }
+
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode };
+    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, restoreExecutionModes };
     return;
   }
 
@@ -175,7 +228,9 @@
   const ready = (async () => {
     for (let attempt = 0; attempt < 300; attempt++) {
       app = window.comfyAPI?.app?.app;
-      if (app?.canvas && app?.rootGraph && app?.vueAppReady && typeof app.loadGraphData === "function") return app;
+      // positionConversion is installed at the END of ComfyApp.setup, after
+      // registerNodes and extension setup. vueAppReady alone is too early.
+      if (app?.canvas && app?.rootGraph && app?.vueAppReady && app?.positionConversion && typeof app.loadGraphData === "function") return app;
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     throw new Error("ComfyUI 编辑器启动超时，请检查服务器连接并重试。");
@@ -206,12 +261,19 @@
         }
         await app.loadGraphData(value.workflow, true, true, value.name);
         await new Promise(resolve => setTimeout(resolve, 0));
-        const unmapped = await applyPrompt(app, value.prompt);
+        restoreExecutionModes(app, value.prompt);
+        let unmapped = await applyPrompt(app, value.prompt);
+        // Third-party widgets may finish configuration on animation frames.
+        for (const delay of [100, 300]) {
+          if (!unmapped.length) break;
+          await new Promise(resolve => setTimeout(resolve, delay));
+          unmapped = await applyPrompt(app, value.prompt);
+        }
         if (unmapped.length) {
           mismatch = true;
           // Keep the existing graph available for inspection; do not silently
           // replace newer phone parameters with stale canvas widget values.
-          send("mismatch", { message: `画布与参数面板有 ${unmapped.length} 项无法自动对应。可重新从当前参数创建可编辑画布，原副本会保留。` });
+          send("mismatch", { fields: unmapped, message: `有 ${unmapped.length} 项参数需要核对，当前以只读方式显示节点。原工作流和手机参数已保留。` });
           return false;
         }
       } else {
@@ -230,7 +292,8 @@
     },
     async snapshot() {
       if (!loaded || mismatch) throw new Error("画布尚未准备好保存。");
-      const { output, workflow } = await app.graphToPrompt(app.rootGraph);
+      const { workflow } = await app.graphToPrompt(app.rootGraph);
+      const output = await executablePrompt(app, initialPrompt);
       return JSON.stringify({ prompt: output, workflow });
     },
     async command(name) {
@@ -279,7 +342,7 @@
       })).sort((a, b) => a.title.localeCompare(b.title)));
     },
     scene() { return JSON.stringify(mobileScene(app)); },
-    async widget(id, index, value) { return await setMobileWidget(app, id, index, value); },
+    async widget(id, index, value, name) { return await setMobileWidget(app, id, index, value, name); },
     moveNode(id, x, y) { return moveMobileNode(app, id, x, y); },
     nodeMode(id, mode) {
       if (![0, 2, 4].includes(mode)) throw new Error("无效的节点执行模式。");
@@ -307,14 +370,7 @@
       return change(app, graph => { graph.remove(node); return true; });
     },
     focus(id) {
-      const node = nodeAt(app.canvas.graph, id);
-      if (!node) throw new Error("节点不存在。");
-      app.canvas.selectNode(node);
-      const rect = app.canvas.canvas.getBoundingClientRect();
-      app.canvas.ds.scale = Math.min(1, rect.width / Math.max(280, node.size[0] + 40));
-      app.canvas.ds.offset[0] = -node.pos[0] + 20;
-      app.canvas.ds.offset[1] = -node.pos[1] + 70;
-      app.canvas.setDirty(true, true); return true;
+      return focusNode(app, id);
     },
     subgraph(id) {
       if (!id) { app.canvas.setGraph(app.rootGraph); return true; }

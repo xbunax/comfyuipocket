@@ -8,6 +8,8 @@ struct WorkflowCanvasView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var session = CanvasSession()
     @State private var customControls = false
+    @State private var overview = false
+    @State private var showMismatch = false
     @State private var showNodes = false
     @State private var showPorts = false
     @State private var working = false
@@ -22,11 +24,20 @@ struct WorkflowCanvasView: View {
                     ZStack {
                         CanvasWebView(session: session)
                             .opacity(customControls ? 1 : 0.01)
-                            .allowsHitTesting(customControls)
-                        if !customControls, session.loaded {
+                            .allowsHitTesting(customControls && session.loaded)
+                            .accessibilityHidden(!customControls)
+                        if !customControls, session.available {
+                            if overview {
                             MobileCanvas(session: session) { id in
+                                session.focusedNodeID = id
                                 customControls = true
-                                Task { await session.action("focus", arguments: ["id": id]) }
+                                Task { await session.focusSelection() }
+                            }
+                            } else {
+                                CanvasFocusedNode(session: session) {
+                                    customControls = true
+                                    Task { await session.focusSelection() }
+                                }
                             }
                         }
                         if session.loading {
@@ -82,18 +93,33 @@ struct WorkflowCanvasView: View {
                 if let issue = session.mismatch {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(issue).font(.caption)
-                        Button("保留副本并从当前参数重建画布") {
-                            guard let workflow else { return }
-                            store.duplicate(workflow)
-                            Task { await session.action("rebuild", arguments: ["name": workflow.name]) }
-                        }.buttonStyle(.glass)
-                    }.padding().background(.regularMaterial)
+                        HStack {
+                            Button("查看差异") { showMismatch = true }
+                            Spacer()
+                            Button("重新载入") { if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL) } }
+                        }.font(.caption).buttonStyle(.borderless)
+                    }.padding(12).background(.regularMaterial)
                 }
             }
             .alert("画布操作失败", isPresented: Binding(get: { session.error != nil }, set: { if !$0 { session.error = nil } })) {
                 Button("重试加载") { if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL) } }
                 Button("关闭", role: .cancel) { session.error = nil }
             } message: { Text(session.error ?? "") }
+            .sheet(isPresented: $showMismatch) {
+                NavigationStack {
+                    List {
+                        Section { Text("节点可只读查看。以下字段尚未与执行参数对应，保存和运行已暂停，原有数据会保留。") }
+                        Section("字段") { ForEach(session.mismatchFields, id: \.self) { Text($0).font(.caption.monospaced()).textSelection(.enabled) } }
+                        Section {
+                            Button("保留副本并从当前参数重建画布") {
+                                guard let workflow else { return }
+                                store.duplicate(workflow); showMismatch = false
+                                Task { await session.action("rebuild", arguments: ["name": workflow.name]) }
+                            }
+                        }
+                    }.navigationTitle("参数差异").toolbar { Button("完成") { showMismatch = false } }
+                }
+            }
             .sheet(isPresented: $showNodes) { CanvasNodeLibrary(session: session) }
             .sheet(isPresented: $showPorts) { CanvasConnections(session: session) }
             .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .json, defaultFilename: workflow?.name ?? "Workflow") { result in
@@ -109,12 +135,23 @@ struct WorkflowCanvasView: View {
     }
     private var controls: some View {
         VStack(spacing: 8) {
+            if session.available {
+                CanvasNodeWheel(session: session)
+            }
             HStack {
+                Button(overview ? "节点视图" : "总览", systemImage: overview ? "rectangle" : "square.grid.2x2") {
+                    customControls = false; overview.toggle()
+                }.disabled(!session.available)
+                Spacer()
                 Label(customControls ? "插件专用控件" : "触屏画布", systemImage: customControls ? "rectangle.and.hand.point.up.left" : "hand.point.up.left")
                 Spacer()
                 Button(customControls ? "返回触屏画布" : "专用控件") {
                     customControls.toggle()
-                    Task { await session.refreshScene() }
+                    Task {
+                        await session.refreshScene()
+                        try? await Task.sleep(for: .milliseconds(150))
+                        await session.focusSelection()
+                    }
                 }
             }.font(.caption).padding(.horizontal, 16).padding(.top, 8)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -126,10 +163,10 @@ struct WorkflowCanvasView: View {
                     Button("缩小", systemImage: "minus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 0.75]) } }.labelStyle(.iconOnly)
                     Button("放大", systemImage: "plus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 1.33]) } }.labelStyle(.iconOnly)
                     }
-                }.font(.subheadline).buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 8)
+                }.font(.caption).buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 5)
             }.disabled(!session.loaded || working)
-            HStack {
-                Text(session.saveStatus).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 12) {
+                Text(session.loaded ? "自动保存" : "只读查看").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("保存") { Task { _ = await save() } }.buttonStyle(.glass)
                 Button {
@@ -140,6 +177,7 @@ struct WorkflowCanvasView: View {
                 } label: { Label(store.busy ? "提交中" : "运行", systemImage: "play.fill") }
                     .buttonStyle(.glassProminent).disabled(store.busy)
             }.disabled(!session.loaded || working).padding(.horizontal, 16).padding(.bottom, 8)
+
         }.background(.regularMaterial)
     }
     private func command(_ name: String) { Task { await session.action("command", arguments: ["name": name]) } }
@@ -162,6 +200,9 @@ struct WorkflowCanvasView: View {
 @MainActor @Observable
 final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     var scene = MobileCanvasScene()
+    var available = false
+    var focusedNodeID = ""
+    var mismatchFields: [String] = []
     var mutating = false
     var loading = true
     var loaded = false
@@ -195,7 +236,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         return web
     }
     func open(workflow: Workflow, baseURL: URL) {
-        self.baseURL = baseURL; loading = true; loaded = false; mismatch = nil; error = nil; lastSaved = ""
+        self.baseURL = baseURL; loading = true; loaded = false; available = false; scene = MobileCanvasScene(); focusedNodeID = ""; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
         do { initialText = String(decoding: try JSONEncoder().encode(workflow), as: UTF8.self) }
         catch { self.error = error.localizedDescription; loading = false; return }
         var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -206,7 +247,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard let webView else { throw PocketError.message("画布尚未启动。") }
         let scripts: [String: String] = [
             "scene": "return window.PocketCanvas.scene();",
-            "widget": "return await window.PocketCanvas.widget(id, index, value);",
+            "widget": "return await window.PocketCanvas.widget(id, index, value, name);",
             "moveNode": "return window.PocketCanvas.moveNode(id, x, y);",
             "removeNode": "return window.PocketCanvas.removeNode(id);",
             "groupMode": "return window.PocketCanvas.groupMode(id, mode);",
@@ -220,8 +261,10 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "ports": "return window.PocketCanvas.ports();", "connect": "return window.PocketCanvas.connect(from, output, to, input);",
             "disconnect": "return window.PocketCanvas.disconnect(id, slot);"
         ]
+        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "fit", "zoom", "ports", "library", "subgraph"]
+        if !loaded && !readOnlyMethods.contains(method) { throw PocketError.message("请先解决画布参数差异，再进行修改。") }
         guard let script = scripts[method] else { throw PocketError.message("无效的画布操作。") }
-        return try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page)
+        return try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page) ?? NSNull()
     }
     func snapshot() async throws -> String {
         guard let text = try await call("snapshot") as? String, text.utf8.count <= 20 * 1024 * 1024 else { throw PocketError.message("画布内容无效或超过 20 MB。") }
@@ -230,7 +273,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func action(_ name: String, arguments: [String: Any] = [:]) async {
         do {
             _ = try await call(name, arguments: arguments)
-            if loaded { await refreshScene() }
+            if available { await refreshScene() }
         }
         catch {
             if name == "load" || name == "rebuild" { loading = false }
@@ -241,8 +284,19 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         do {
             if let text = try await call("scene") as? String {
                 scene = try JSONDecoder().decode(MobileCanvasScene.self, from: Data(text.utf8))
+                if !scene.nodes.contains(where: { $0.id == focusedNodeID }) {
+                    focusedNodeID = orderedNodes.first?.id ?? ""
+                }
             }
         } catch { self.error = error.localizedDescription }
+    }
+    var orderedNodes: [MobileCanvasNode] {
+        scene.nodes.sorted { a, b in a.y == b.y ? (a.x == b.x ? a.id.localizedStandardCompare(b.id) == .orderedAscending : a.x < b.x) : a.y < b.y }
+    }
+    func focusSelection() async {
+        guard available, !focusedNodeID.isEmpty else { return }
+        do { _ = try await call("focus", arguments: ["id": focusedNodeID]) }
+        catch { self.error = error.localizedDescription }
     }
     private func trusted(_ url: URL?) -> Bool {
         guard let url, let baseURL else { return false }
@@ -252,8 +306,8 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let body = message.body as? [String: Any] else { return }
         switch body["type"] as? String {
         case "ready": Task { await action("load", arguments: ["text": initialText]) }
-        case "loaded": loading = false; loaded = true; mismatch = nil; Task { await refreshScene() }
-        case "mismatch": loading = false; loaded = false; mismatch = body["message"] as? String
+        case "loaded": loading = false; loaded = true; available = true; mismatch = nil; mismatchFields = []; Task { await refreshScene(); await focusSelection() }
+        case "mismatch": loading = false; loaded = false; available = true; mismatch = body["message"] as? String; mismatchFields = body["fields"] as? [String] ?? []; Task { await refreshScene(); await focusSelection() }
         case "error": loading = false; error = body["message"] as? String
         default: break
         }
@@ -264,7 +318,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loading = false; self.error = error.localizedDescription }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loading = false; self.error = error.localizedDescription }
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { loaded = false; loading = false; error = "画布进程已暂停，请重新载入。已保存的修改仍在手机中。" }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { loaded = false; available = false; loading = false; error = "画布进程已暂停，请重新载入。已保存的修改仍在手机中。" }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         dialog(webView, message: message, confirm: false) { _ in completionHandler() }
     }

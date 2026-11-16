@@ -98,3 +98,46 @@ test('node movement edits only geometry and participates in undo transactions', 
   assert.throws(()=>moveMobileNode(f.app,'1',NaN,40));
   assert.deepEqual(f.transactions(),[1,1]);
 });
+
+const { executablePrompt, equivalentInput, focusNode, restoreExecutionModes } = require('../ios/Pocket/CanvasBridge.js');
+test('hidden named scalar widgets survive API omission without reviving linked inputs', async () => {
+  const f=fixture(); f.source.type='Source';
+  f.source.widgets.push({name:'folded',value:0.8,type:'hidden',hidden:true}, {name:'linked',value:1,type:'hidden'});
+  f.source.inputs.push({name:'linked',link:9});
+  f.app.graphToPrompt=async()=>({output:{'1':{class_type:'Source',inputs:{width:512}}}});
+  const result=await executablePrompt(f.app,{'1':{class_type:'Source',inputs:{folded:0.8,linked:['2',0]}}});
+  assert.equal(result['1'].inputs.folded,0.8); assert.equal(result['1'].inputs.linked,undefined);
+});
+test('custom JSON ordering is equivalent but actual media and array order changes are not', () => {
+  const expected={class_type:'LazyMergeWorkbench',inputs:{'图片数据':'[{"image":"a.png","mask":"b.png"}]'}};
+  assert.equal(equivalentInput(expected,{inputs:{'图片数据':'[{"mask":"b.png","image":"a.png"}]'}},'图片数据'),true);
+  assert.equal(equivalentInput(expected,{inputs:{'图片数据':'[{"mask":"c.png","image":"a.png"}]'}},'图片数据'),false);
+});
+test('restoring executed nodes follows the API prompt without activating unrelated bypassed stages', () => {
+  const f=fixture(); Object.assign(f.source,{type:'Source',mode:4});Object.assign(f.target,{type:'Target',mode:4});
+  restoreExecutionModes(f.app,{'1':{class_type:'Source',inputs:{}}});
+  assert.equal(f.source.mode,0);assert.equal(f.target.mode,4);
+});
+test('wheel focus fits tall and wide nodes within both viewport axes without editing geometry', () => {
+  const f=fixture(); const selected=[];
+  Object.assign(f.app.canvas,{canvas:{getBoundingClientRect:()=>({width:360,height:500})},ds:{scale:1,offset:[0,0]},selectNode:n=>selected.push(n.id)});
+  for(const size of [[280,1800],[1200,150]]){
+    f.source.pos=[900,-400];f.source.size=size;
+    focusNode(f.app,'1');const ds=f.app.canvas.ds;
+    const left=(900+ds.offset[0])*ds.scale,top=(-432+ds.offset[1])*ds.scale;
+    assert.ok(left>=19.99 && top>=19.99);
+    assert.ok(left+size[0]*ds.scale<=340.01);
+    assert.ok(top+(size[1]+32)*ds.scale<=480.01);
+    assert.deepEqual(f.source.pos,[900,-400]); assert.deepEqual(f.source.size,size);
+  }
+  assert.deepEqual(selected,[1,1]);
+});
+test('canvas bridge waits for complete frontend setup instead of the first graph object', async () => {
+  const vm=require('node:vm'),fs=require('node:fs');const messages=[];
+  const app={canvas:{},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{}};
+  const context={window:{comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{createElement:()=>({}),head:{append(){}}},setTimeout};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
+  await new Promise(r=>setTimeout(r,50));assert.equal(messages.some(m=>m.type==='ready'),false);
+  app.positionConversion={};await new Promise(r=>setTimeout(r,200));
+  assert.equal(messages.filter(m=>m.type==='ready').length,1);
+});

@@ -80,7 +80,7 @@ struct MobileCanvas: View {
                             Button("启用此分组") { groupMode = 0 }
                             Button("静音此分组") { groupMode = 2 }
                             Button("旁路此分组") { groupMode = 4 }
-                        }.font(.caption).padding(10)
+                        }.font(.caption).padding(10).disabled(!session.loaded)
                     }
                 }.padding(.horizontal, 12).padding(.vertical, 8)
             }
@@ -90,6 +90,7 @@ struct MobileCanvas: View {
                         .background(Color(uiColor: .systemGroupedBackground))
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 8).onChanged { event in
+                            guard session.loaded || !moving else { return }
                             if gestureOffset == nil {
                                 gestureOffset = offset
                                 if moving && !compact { movingID = hit(event.startLocation)?.id }
@@ -231,11 +232,12 @@ struct MobileNodeInspector: View {
                         Menu("执行状态：\(node.modeTitle)") {
                             Button("启用") { pendingMode = 0 }; Button("静音（不执行）") { pendingMode = 2 }; Button("旁路（跳过处理）") { pendingMode = 4 }
                         }
+                        .disabled(!session.loaded)
                         if node.subgraph { Button("进入子图", systemImage: "square.stack.3d.down.right") {
                             Task { await session.action("subgraph", arguments: ["id": nodeID]); dismiss() }
                         } }
-                        Button("删除此节点", role: .destructive) { deleting = true }
-                        Button("打开专用控件", systemImage: "rectangle.and.hand.point.up.left") { openCustom(); dismiss() }
+                        Button("删除此节点", role: .destructive) { deleting = true }.disabled(!session.loaded)
+                        Button("打开专用控件", systemImage: "rectangle.and.hand.point.up.left") { openCustom(); dismiss() }.disabled(!session.loaded)
                     } footer: { Text("复杂时间轴、遮罩和插件专用交互可进入专用控件。更改执行状态会影响生成结果。") }
                     Section("参数") {
                         ForEach(node.widgets) { widget in
@@ -244,7 +246,7 @@ struct MobileNodeInspector: View {
                                     Text(widget.name).font(.subheadline).foregroundStyle(.secondary)
                                     Text(widget.value.text.isEmpty ? "未填写" : widget.value.text).lineLimit(3).foregroundStyle(.primary)
                                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-                            }
+                            }.disabled(!session.loaded)
                         }
                     }
                 }
@@ -261,7 +263,7 @@ struct MobileNodeInspector: View {
     }
 }
 
-private struct MobileWidgetEditor: View {
+struct MobileWidgetEditor: View {
     let session: CanvasSession
     let nodeID: String
     let widget: MobileCanvasWidget
@@ -313,7 +315,7 @@ private struct MobileWidgetEditor: View {
                 value = number
             }
             session.mutating = true; defer { session.mutating = false }
-            _ = try await session.call("widget", arguments: ["id": nodeID, "index": widget.id, "value": value])
+            _ = try await session.call("widget", arguments: ["id": nodeID, "index": widget.id, "value": value, "name": widget.name])
             await session.refreshScene(); dismiss()
         } catch { issue = error.localizedDescription }
     }

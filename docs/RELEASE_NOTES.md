@@ -1,27 +1,19 @@
-ComfyUI Pocket v0.9.0
+ComfyUI Pocket v0.9.1
 
-- Touch canvas is now drawn by the native iOS interface: readable compact cards,
-  original-layout mode, group navigation, node search, pan/pinch zoom, node parameter
-  sheets, movement in original-layout mode, and explicit node/group execution states.
-  Compact arrangement is a view preference and never rewrites the original graph.
-- ComfyUI remains the graph execution/serialization engine. Specialized plugin
-  controls are available separately; add/connect/disconnect, undo/redo, save and run
-  continue to operate on the same graph. Node deletion also removes its connections.
-- Common/all parameter modes reduce clutter. Chinese prompt, seed and dimension
-  fields are recognized. LoRA slots are grouped, and face refinement/upscale/frame
-  interpolation have their own section. Existing prompt block editing is preserved.
-- K2/Qwen reference images have previews, local/photo/gallery selection, ordering
-  and deletion. Existing masks and extension metadata survive reordering.
-- H3 contiguous text storyboards have prompt cards, frame duration, add/reorder/delete,
-  synchronized derived inputs and inactive track preservation. Complex media/audio,
-  retakes, gaps and trimmed timelines use the dedicated plugin control.
-- H3 named properties are restored before graph configuration so the plugin's cached
-  editor matches mobile edits. Frame-equivalent second rounding no longer prevents
-  opening the canvas. Unrecognized custom serializers still report mismatches.
+- Fix mobile canvas startup: wait until ComfyUI finishes node registration and
+  extension setup before loading a workflow. The previous early graph-ready check
+  could produce UNKNOWN widgets and large parameter mismatch counts on cold starts.
+- Node wheel: scroll vertically to select a node, with selection haptics. The selected
+  node fills the native parameter area. In dedicated plugin controls, the same wheel
+  centers and fits the actual node within both viewport dimensions. Viewport fitting
+  never changes node geometry. Overview and connection tools remain available.
+- Canvas mismatch recovery stays visible as read-only nodes with exact field details
+  and retry. Save/run are paused until resolved; existing layout and parameters are
+  preserved. Rebuilding with a copy is available inside the details sheet.
+- Respect hidden named scalar widgets, equivalent serialized custom JSON, delayed
+  widget initialization and executed node modes from the saved API prompt. Widget
+  edits resolve by name so dynamic plugin controls cannot shift an indexed edit.
 
-- Gallery groups images and videos by task ID and starts collapsed. Batch results
-  share one card with a cover, counts, timestamp and expandable previews. Task
-  metadata is archived so removing task history does not split saved batch works.
-
-Requires the existing Pocket server plugin v0.6.0; no reinstall is needed for this update.
-No simulator tests are run. Sign the unsigned IPA and test touch interactions on device.
+Existing server plugin v0.6.0 is compatible; no reinstall is needed.
+No simulator tests are run. Sign the unsigned IPA before installing; touch behavior
+and final layout should be verified on the physical iPhone.
