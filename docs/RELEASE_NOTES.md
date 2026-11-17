@@ -1,20 +1,28 @@
-ComfyUI Pocket v0.9.3
+ComfyUI Pocket v0.10.0
 
-- Keep text inputs focused while the keyboard changes the canvas viewport. Node
-  refitting and automatic serialization pause during text/IME editing, so keyboard
-  layout changes cannot move the input out of view or refocus another node.
-- Tapping an original node text field zooms and positions that field within the
-  visible canvas above the keyboard. Long text areas are capped to available
-  height and retain their own scrolling; effective text size stays readable.
-- The node wheel and full toolbar temporarily give way to a compact Done Input
-  control. Finish editing or leave the field to restore the exact prior canvas
-  scale and offset, then resume automatic saving. Switching fields preserves the
-  original return view. Original DOM controls are retained, with no replacement
-  text editor and no changes to node geometry or connections.
-- Works with standard multiline widgets and tested custom controls in H3 Director,
-  K2/Qwen Merge Workbench and WorkFisher workflows.
+- Cache the two most recently used canvases per server/workflow. Reopening an
+  unchanged graph reuses its live WebKit editor and viewport; changed parameters
+  or layout update graph data within the existing runtime. Workflow data already
+  persists on disk, and WebKit now keeps its persistent resource cache. Idle pages
+  are released under memory pressure. Manual Reload Canvas refreshes the runtime.
+- Compact mobile layout: run moves to the top, with visible save/queue/error and
+  execution feedback. The bottom becomes one compact action row; the vertical
+  node wheel expands only when requested. Add a native saved-workflow picker.
+- Toggle ComfyUI assets, sidebar and workflow chrome on/off. Hidden chrome stays
+  hidden even when an extension resets focus mode. Guard against overwriting the
+  original phone workflow after switching graphs from the web UI.
+- Canvas Run waits for an ongoing save, commits text editing, saves the actual
+  current graph and reports the accepted task ID or submission error in the canvas.
+- Server hardware bar shows real GPU/CPU utilization and RAM/VRAM usage. Standard
+  system_stats provides memory; an already-installed NodeUI resource provider
+  supplies optional utilization metrics. Unavailable readings remain unknown.
+- Fix slow K2/Qwen startup handling: track setup completion and public coordinate
+  readiness instead of relying solely on a private frontend field. Allow complex
+  extension initialization up to three minutes with stage-specific progress and
+  errors. No early loading before node registration.
 
-Existing server plugin v0.6.0 is compatible; no reinstall is needed.
-Device IPA archive only, with no simulator tests. Sign the unsigned IPA before
-installing. Keyboard behavior is checked in the browser; final iPhone IME and
-keyboard interactions should be verified on the physical device.
+Existing Pocket server plugin v0.6.0 remains compatible; no reinstall is required.
+After restarting the app the editor still initializes once, and full canvas editing
+and generation require a server connection. Browser checks cover current workflows;
+no real generation jobs were submitted for verification. No simulator tests are run.
+Sign the unsigned device IPA and verify final layout/touch behavior on the iPhone.

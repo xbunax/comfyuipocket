@@ -46,6 +46,10 @@ final class ComfyClient {
         let data = try await checked(request(path, method: method, body: body, query: query))
         return data.isEmpty ? .object([:]) : try JSONDecoder().decode(JSONValue.self, from: data)
     }
+    func hardwareJSON(_ path: String) async throws -> JSONValue {
+        var r = try request(path); r.timeoutInterval = 3; r.cachePolicy = .reloadIgnoringLocalCacheData
+        return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
+    }
     func image(_ image: OutputImage) async throws -> Data {
         try await mediaData(mediaURL(image), revision: image.promptID)
     }

@@ -3,20 +3,21 @@ import SwiftUI
 /// A stable ID, rather than a row number, keeps focus when nodes are refreshed.
 struct CanvasNodeWheel: View {
     let session: CanvasSession
+    var compact = false
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            if !compact { HStack {
                 Text("上下滚动 · 定位原始节点").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let index = session.orderedNodes.firstIndex(where: { $0.id == session.focusedNodeID }) {
                     Text("\(index + 1) / \(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
-            }.padding(.horizontal, 16).padding(.top, 6)
+            }.padding(.horizontal, 16).padding(.top, 6) }
             NodeWheelPicker(nodes: session.orderedNodes, selection: Binding(get: { session.focusedNodeID }, set: {
                 session.nodeFocusActive = true
                 session.focusedNodeID = $0
             }))
-                .frame(height: 94).clipped()
+                .frame(height: compact ? 76 : 94).clipped()
         }
         .task(id: session.focusedNodeID) {
             do { try await Task.sleep(for: .milliseconds(100)); try Task.checkCancellation() }

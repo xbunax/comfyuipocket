@@ -22,6 +22,8 @@ final class PocketStore {
     var syncing = false
     var busy = false
     var canvasEditingID: String?
+    @ObservationIgnored var canvasEditingSession: CanvasSession?
+    @ObservationIgnored let canvasSessions = CanvasSessionCache()
     var prompts: [SavedPrompt] = []
     var pinnedWorkflows: [String] = []
     var generationTasks: [GenerationTask] = []
@@ -281,8 +283,13 @@ final class PocketStore {
         } catch { if client === api { notice = "刷新失败：\(error.localizedDescription)" } }
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
-        guard let api = client, !busy else { return }
-        guard !workflow.prompt.isEmpty else { error = "画布中还没有可执行节点，请先添加并连接节点。"; return }
+        let result = await enqueue(workflow, count: count, randomizeSeeds: randomizeSeeds)
+        if let message = result.error { error = message }
+    }
+    func enqueue(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async -> GenerationSubmission {
+        guard let api = client, connected else { return GenerationSubmission(error: "服务器尚未连接。") }
+        guard !busy else { return GenerationSubmission(error: "其他任务正在提交，请稍后重试。") }
+        guard !workflow.prompt.isEmpty else { return GenerationSubmission(error: "画布中还没有可执行节点，请先添加并连接节点。") }
         busy = true; defer { busy = false }
         let total = max(1, min(count, 20))
         let taskID = UUID().uuidString
@@ -291,6 +298,7 @@ final class PocketStore {
                                               requestedCount: total, submitting: true), at: 0)
         saveGenerationTasks()
         var queued = 0
+        var result = GenerationSubmission(taskID: taskID)
         defer {
             if let index = generationTasks.firstIndex(where: { $0.id == taskID }) { generationTasks[index].submitting = false }
             saveGenerationTasks()
@@ -311,6 +319,7 @@ final class PocketStore {
                 let promptID = reply["prompt_id"].text
                 guard !promptID.isEmpty else { throw PocketError.message("提交失败：\(reply)") }
                 recordPrompt(promptID, workflowID: workflow.id)
+                result.promptIDs.append(promptID)
                 if let taskIndex = generationTasks.firstIndex(where: { $0.id == taskID }) {
                     generationTasks[taskIndex].items.append(GenerationItem(id: promptID, prompt: submitted.prompt, sequence: index))
                 }
@@ -320,13 +329,14 @@ final class PocketStore {
             notice = "已加入 1 个任务 · \(workflow.name)\(queued > 1 ? "（\(queued) 次生成）" : "")"
             save(); await refresh()
         } catch {
-            self.error = error.localizedDescription
+            result.error = error.localizedDescription
             if let index = generationTasks.firstIndex(where: { $0.id == taskID }) {
                 generationTasks[index].submissionError = error.localizedDescription
             }
             if queued > 0 { notice = "批次已提交 \(queued)/\(total) 次生成，后续提交失败。" }
             await refresh()
         }
+        return result
     }
     private func recordPrompt(_ promptID: String, workflowID: String) {
         var ids = recentPrompts[workflowID] ?? []
@@ -410,6 +420,7 @@ final class PocketStore {
         }
     }
     func delete(_ id: String) {
+        canvasSessions.remove(workflowID: id)
         let canonical = id.count == 32 && id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil
         if canonical { pendingDeletes.insert(id) }
         syncRecords.removeValue(forKey: id)

@@ -238,23 +238,61 @@
   let mismatch = false;
   let initialPrompt = null;
   let textEditor;
+  let ownedGraphID;
+  const startup = { app: null, registered: false, complete: false, failure: null };
+  function followStartup(candidate) {
+    if (!candidate || startup.app === candidate) return;
+    startup.app = candidate;
+    for (const [method, flag] of [["registerNodes", "registered"], ["setup", "complete"]]) {
+      const original = candidate[method];
+      if (typeof original !== "function") continue;
+      candidate[method] = async function(...args) {
+        try { const result = await original.apply(this, args); startup[flag] = true; return result; }
+        catch (error) { startup.failure = error.message || String(error); throw error; }
+      };
+    }
+  }
+  function coordinatesReady(candidate) {
+    if (candidate?.positionConversion) return true;
+    if (typeof candidate?.clientPosToCanvasPos !== "function") return false;
+    try { return candidate.clientPosToCanvasPos([0, 0]).every(Number.isFinite); }
+    catch { return false; }
+  }
+  function layoutSettled() {
+    return new Promise(resolve => {
+      const timer = setTimeout(resolve, 180);
+      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
+    });
+  }
+  function markWorkspace() {
+    let workspace = app.canvasContainer?.querySelector(".side-toolbar-container");
+    while (workspace?.parentElement && workspace.parentElement !== app.canvasContainer) workspace = workspace.parentElement;
+    if (workspace && workspace.parentElement === app.canvasContainer) workspace.dataset.pocketWorkspace = "true";
+  }
   const ready = (async () => {
-    for (let attempt = 0; attempt < 300; attempt++) {
+    const started = Date.now();
+    let previousMessage = "";
+    while (Date.now() - started < 180000) {
       app = window.comfyAPI?.app?.app;
-      // positionConversion is installed at the END of ComfyApp.setup, after
-      // registerNodes and extension setup. vueAppReady alone is too early.
-      if (app?.canvas && app?.rootGraph && app?.vueAppReady && app?.positionConversion && typeof app.loadGraphData === "function") {
+      followStartup(app);
+      if (startup.failure) throw new Error(`ComfyUI 节点初始化失败：${startup.failure}`);
+      // A graph object alone is too early. Follow actual setup completion, with
+      // the public coordinate API for a bridge attached after setup has started.
+      if (app?.canvas && app?.rootGraph && app?.vueAppReady && (startup.complete || coordinatesReady(app)) && typeof app.loadGraphData === "function") {
         // Keep the real graph and plugin DOM widgets mounted. Pocket supplies
         // navigation and the node wheel; desktop chrome must not consume its viewport.
         if (app.extensionManager?.focusMode === false) app.extensionManager.toggleFocusMode?.();
-        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await layoutSettled();
+        markWorkspace();
         app.canvas.resize?.();
         textEditor = installTextEditing(app);
         return app;
       }
+      const message = startup.registered ? "节点已加载，正在初始化扩展控件…" : "正在加载 ComfyUI 节点与扩展…";
+      if (message !== previousMessage) { send("loading", { message }); previousMessage = message; }
       await new Promise(resolve => setTimeout(resolve, 200));
     }
-    throw new Error("ComfyUI 编辑器启动超时，请检查服务器连接并重试。");
+    throw new Error(startup.registered ? "节点已加载，但扩展控件初始化未完成。可重新加载画布，并检查 ComfyUI 前端扩展错误。" : "ComfyUI 节点加载超时。请检查服务器的节点定义与扩展资源是否能正常读取。");
   })();
   ready.then(() => send("ready")).catch(error => send("error", { message: error.message }));
 
@@ -407,6 +445,7 @@
         await app.loadApiJson(value.prompt, value.name);
       }
       mismatch = false; loaded = true;
+      ownedGraphID = app.rootGraph.id;
       this.fit();
       send("loaded");
       return true;
@@ -416,6 +455,7 @@
       textEditor?.reset();
       await app.loadApiJson(initialPrompt, name);
       mismatch = false; loaded = true;
+      ownedGraphID = app.rootGraph.id;
       this.fit(); send("loaded"); return true;
     },
     async snapshot() {
@@ -423,6 +463,7 @@
       // while an input or IME composition is active; the next autosave commits it.
       if (textEditor?.editing) return null;
       if (!loaded || mismatch) throw new Error("画布尚未准备好保存。");
+      if (ownedGraphID && app.rootGraph.id !== ownedGraphID) throw new Error("ComfyUI 面板已切换到其他工作流。请使用手机画布菜单中的“切换工作流”，或重新加载当前画布，避免覆盖原工作流。");
       const { workflow } = await app.graphToPrompt(app.rootGraph);
       if (textEditor?.editing) return null;
       const output = await executablePrompt(app, initialPrompt);
@@ -513,6 +554,12 @@
       document.documentElement.classList.toggle("pocket-canvas-compact", !enabled);
       return true;
     },
+    async chrome(enabled) {
+      document.documentElement.classList.toggle("pocket-canvas-isolated", !enabled);
+      if (app.extensionManager?.focusMode === enabled) app.extensionManager.toggleFocusMode?.();
+      await layoutSettled(); markWorkspace(); app.canvas.resize?.();
+      return true;
+    },
     subgraph(id) {
       textEditor?.reset();
       if (!id) { app.canvas.setGraph(app.rootGraph); return true; }
@@ -527,7 +574,12 @@
 
   const style = document.createElement("style");
   document.documentElement?.classList?.add("pocket-canvas-compact");
-  style.textContent = `#graph-canvas-container { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100dvh !important; z-index: 2; }
+  document.documentElement?.classList?.add("pocket-canvas-isolated");
+  style.textContent = `.pocket-canvas-isolated #graph-canvas-container { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100dvh !important; z-index: 2; }
+    .pocket-canvas-isolated [data-pocket-workspace], .pocket-canvas-isolated .workflow-tabs-container,
+    .pocket-canvas-isolated .side-toolbar-container, .pocket-canvas-isolated .comfy-menu,
+    .pocket-canvas-isolated #comfyui-body-top, .pocket-canvas-isolated #comfyui-body-bottom,
+    .pocket-canvas-isolated #comfyui-body-left, .pocket-canvas-isolated #comfyui-body-right { display: none !important; }
     #lazy-res-monitor, rgthree-progress-bar { display: none !important; }
     .pocket-canvas-compact #graph-canvas-container .selection-toolbox,
     .pocket-canvas-compact #graph-canvas-container [role="toolbar"]:has([data-testid="zoom-controls-button"]) { display: none !important; }

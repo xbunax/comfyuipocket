@@ -1,5 +1,11 @@
 import Foundation
 
+struct GenerationSubmission {
+    var taskID: String? = nil
+    var promptIDs: [String] = []
+    var error: String? = nil
+}
+
 struct GenerationItem: Codable, Identifiable, Equatable {
     var id: String
     var prompt: [String: JSONValue]

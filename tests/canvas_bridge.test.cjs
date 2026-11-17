@@ -136,12 +136,27 @@ test('canvas bridge waits for complete frontend setup instead of the first graph
   const vm=require('node:vm'),fs=require('node:fs');const messages=[];
   let resized=false;
   const app={canvas:{resize:()=>{resized=true;}},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{},extensionManager:{focusMode:false,toggleFocusMode(){this.focusMode=true;}}};
-  const context={window:{addEventListener(){},comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{addEventListener(){},createElement:()=>({}),head:{append(){}}},setTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
+  const context={window:{addEventListener(){},comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{addEventListener(){},createElement:()=>({}),head:{append(){}}},setTimeout,clearTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
   vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
   await new Promise(r=>setTimeout(r,50));assert.equal(messages.some(m=>m.type==='ready'),false);
   app.positionConversion={};await new Promise(r=>setTimeout(r,200));
   assert.equal(messages.filter(m=>m.type==='ready').length,1);
   assert.equal(app.extensionManager.focusMode,true);assert.equal(resized,true);
+});
+
+test('startup follows actual setup completion when the frontend has no private conversion field', async () => {
+  const vm=require('node:vm'),fs=require('node:fs'),messages=[];
+  let finishRegistration,finishSetup;
+  const app={canvas:{resize(){}},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{},
+    registerNodes:()=>new Promise(r=>{finishRegistration=r;}),
+    async setup(){await this.registerNodes();await new Promise(r=>{finishSetup=r;});}};
+  const context={window:{addEventListener(){},comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{addEventListener(){},createElement:()=>({}),head:{append(){}}},setTimeout,clearTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
+  const setup=app.setup();finishRegistration();await Promise.resolve();await Promise.resolve();
+  await new Promise(r=>setTimeout(r,220));assert.equal(messages.some(m=>m.type==='ready'),false);
+  finishSetup();await setup;await new Promise(r=>setTimeout(r,220));
+  assert.equal(messages.filter(m=>m.type==='ready').length,1);
+  assert.equal(app.positionConversion,undefined);
 });
 
 test('text input camera keeps the field readable inside keyboard and visual viewport bounds', () => {
