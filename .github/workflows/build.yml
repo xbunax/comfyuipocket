@@ -45,19 +45,22 @@ jobs:
           if-no-files-found: error
 
   ios:
-    runs-on: macos-15-intel
+    runs-on: xcode-27
     timeout-minutes: 45
     env:
       NSUnbufferedIO: YES
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Select Xcode 27
+        run: |
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - uses: actions/cache@v4
         with:
           path: .build
-          key: swift-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift', 'ios/Pocket/*.swift', 'ios/Tests/*.swift') }}
-          restore-keys: swift-${{ runner.os }}-${{ runner.arch }}-
+          key: swift-xcode27_1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift', 'ios/Pocket/*.swift', 'ios/Tests/*.swift') }}
+          restore-keys: swift-xcode27_1-${{ runner.os }}-${{ runner.arch }}-
       - name: Swift core model tests
         run: |
           set -o pipefail
@@ -172,6 +175,8 @@ jobs:
           rm -rf "$RUNNER_TEMP/pocket-signing"
       - name: Verify archived transport policy
         run: python3 scripts/check_transport_policy.py build/Pocket.xcarchive/Products/Applications/ComfyUIPocket.app/Info.plist
+      - name: Verify resizable build
+        run: python3 scripts/check_resizable_build.py build/Pocket.xcarchive/Products/Applications/ComfyUIPocket.app/Info.plist
       - name: Upload device logs
         if: always()
         uses: actions/upload-artifact@v4
