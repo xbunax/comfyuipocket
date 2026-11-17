@@ -29,8 +29,10 @@ final class IrohTransport {
     func start() async throws {
         status = "建立仅直连通道…"
         endpoint = try await timed(15) {
-            try await Endpoint.bind(options: EndpointOptions(preset: presetN0DisableRelay(),
+            let endpoint = try await Endpoint.bind(options: EndpointOptions(preset: presetN0DisableRelay(),
                 secretKey: Self.identity(), relayMode: RelayMode.disabled()))
+            guard !self.stopped, !Task.isCancelled else { try? await endpoint.close(); throw CancellationError() }
+            return endpoint
         }
         _ = try await ensureConnection()
         let url = try await startListener()
@@ -243,12 +245,7 @@ final class IrohTransport {
         return try JSONDecoder().decode(JSONValue.self, from: await stream.readExact(size: size))
     }
     private func timed<T: Sendable>(_ seconds: Double, body: @escaping @MainActor @Sendable () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await body() }
-            group.addTask { try await Task.sleep(for: .seconds(seconds)); throw PocketError.message("建立直连超时，未使用中继。") }
-            defer { group.cancelAll() }
-            return try await group.next()!
-        }
+        try await PairingDeadline<T>.run(seconds, body: body)
     }
     private static func randomData() throws -> Data {
         var data = Data(count: 32)

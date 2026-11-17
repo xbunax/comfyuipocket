@@ -6,6 +6,20 @@ import XCTest
 #endif
 
 final class PairingTests: XCTestCase {
+    @MainActor func testDeadlineReturnsWhileNativeWorkIgnoresCancellation() async throws {
+        let start = Date()
+        do {
+            _ = try await PairingDeadline<Int>.run(0.03) {
+                await withCheckedContinuation { continuation in
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { continuation.resume(returning: 1) }
+                }
+            }
+            XCTFail("Expected timeout")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("超时")) }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.3)
+        // Let the deliberately uncooperative work complete without leaking it.
+        try await Task.sleep(for: .seconds(0.45))
+    }
     private func code(_ overrides: [String: Any] = [:]) throws -> String {
         var value: [String: Any] = ["v": 1, "ticket": "endpoint-test", "endpointId": String(repeating: "a", count: 64),
             "name": "电脑", "token": String(repeating: "t", count: 43), "expiresAt": 2000, "directOnly": true]

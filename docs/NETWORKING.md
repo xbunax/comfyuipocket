@@ -24,7 +24,7 @@ Local proxy requests require a private header, HttpOnly cookie or private media
 path, plus exact loopback Host and same Origin when present. Local credentials
 are removed before forwarding. Ordinary HTTP sockets close after one request so
 every media path is validated; QUIC and upgraded WebSockets stay persistent.
-Caches, task history and workflows use iroH's stable endpoint ID, never its changing
+Caches, task history and workflows use iroh's stable endpoint ID, never its changing
 loopback port or private token. Different servers retain separate cache namespaces.
 
 Local integration tests cover real relay-disabled QUIC, HTTP, WebSocket text/binary,

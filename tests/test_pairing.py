@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import pathlib
 import sys
@@ -32,7 +33,8 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
         iroh.iroh_ffi.uniffi_set_event_loop(asyncio.get_running_loop())
         self.payload = bytes(range(256)) * 8192
         app = web.Application()
-        app.router.add_get("/stats", lambda _: web.json_response({"device": "test"}))
+        async def stats(request): return web.json_response({"device": "test"})
+        app.router.add_get("/stats", stats)
         async def upload(request):
             digest = hashlib.sha256(); size = 0
             async for data in request.content.iter_chunked(65536): digest.update(data); size += len(data)
@@ -44,7 +46,8 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
                 elif message.type == web.WSMsgType.BINARY: await ws.send_bytes(message.data)
             return ws
         file = pathlib.Path(self.temp.name) / "media.bin"; file.write_bytes(self.payload)
-        app.router.add_get("/media", lambda _: web.FileResponse(file))
+        async def media(request): return web.FileResponse(file)
+        app.router.add_get("/media", media)
         app.router.add_post("/upload", upload); app.router.add_get("/ws", socket)
         self.runner = web.AppRunner(app); await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0); await site.start()
@@ -109,7 +112,7 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 206); self.assertEqual(await response.read(), self.payload[123:457])
             async with client.get(url + "/media") as response:
                 self.assertEqual(hashlib.sha256(await response.read()).digest(), hashlib.sha256(self.payload).digest())
-            async with client.post(url + "/upload", data=self.payload) as response:
+            async with client.post(url + "/upload", data=io.BytesIO(self.payload)) as response:
                 self.assertEqual(await response.json(), {"bytes": len(self.payload), "sha256": hashlib.sha256(self.payload).hexdigest()})
             async with client.ws_connect(url + "/ws") as ws:
                 await ws.send_str("queue-event"); self.assertEqual((await ws.receive()).data, "queue-event")

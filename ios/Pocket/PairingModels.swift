@@ -1,5 +1,38 @@
 import Foundation
 
+/// FFI futures do not observe Swift task cancellation. A structured task group
+/// would wait for the losing FFI task and defeat the timeout. Return immediately;
+/// the owner closes its endpoint/socket to release any outstanding native work.
+@MainActor final class PairingDeadline<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var work: Task<Void, Never>?
+    private var timer: Task<Void, Never>?
+    private var result: Result<Value, Error>?
+    private func finish(_ value: Result<Value, Error>) {
+        guard result == nil else { return }
+        result = value
+        continuation?.resume(with: value); continuation = nil
+        work?.cancel(); timer?.cancel(); work = nil; timer = nil
+    }
+    static func run(_ seconds: Double, body: @escaping @MainActor @Sendable () async throws -> Value) async throws -> Value {
+        let race = PairingDeadline<Value>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if let result = race.result { continuation.resume(with: result); return }
+                race.continuation = continuation
+                race.work = Task { @MainActor in
+                    do { race.finish(.success(try await body())) } catch { race.finish(.failure(error)) }
+                }
+                race.timer = Task { @MainActor in
+                    do { try await Task.sleep(for: .seconds(seconds)) }
+                    catch { return }
+                    race.finish(.failure(PocketError.message("建立直连超时，未使用中继。")))
+                }
+            }
+        } onCancel: { Task { @MainActor in race.finish(.failure(CancellationError())) } }
+    }
+}
+
 struct IrohPeerProfile: Codable, Equatable, Sendable {
     var endpointId: String
     var ticket: String

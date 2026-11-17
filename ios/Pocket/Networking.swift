@@ -49,6 +49,9 @@ final class ComfyClient {
         let (data, response) = try await session.data(for: r)
         guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if loopbackAccess != nil && status == 503 {
+                throw PocketError.message("P2P 直连已断开或无法建立；未使用中继。请检查电脑和网络后重连。")
+            }
             let message = String(data: data.prefix(2000), encoding: .utf8) ?? "无响应内容"
             throw PocketError.message("服务器返回 HTTP \(status)：\(message)")
         }

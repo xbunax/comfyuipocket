@@ -1,10 +1,10 @@
 # ComfyUI Pocket
 
-使用 SwiftUI + iOS 26 Liquid Glass 的 ComfyUI 手机客户端。通过 **IP + 端口** 直连自己的电脑；外网组网使用手机上的 Tailscale 官方 App。ComfyUI 中的全部工作流会自动双向同步，不需要逐个选择。代码在 Windows 编写，iOS 构建和 IPA 发布全部由 GitHub Actions 完成。
+使用 SwiftUI + iOS 26 Liquid Glass 的 ComfyUI 手机客户端。通过 **IP + 端口** 或 **iroh P2P 配对** 直连自己的电脑。ComfyUI 中的全部工作流会自动双向同步，不需要逐个选择。代码在 Windows 编写，iOS 构建和 IPA 发布全部由 GitHub Actions 完成。
 
 ## 已实现
 
-- IPv4 / IPv6 配对，HTTP / HTTPS；局域网直连；外网可配合 Tailscale 官方 iOS App。
+- IPv4 / IPv6 配对，HTTP / HTTPS；新增 iroh 二维码/完整配对码，严格仅直连。
 - 自动同步 ComfyUI 已保存的**全部工作流**；新增、修改、重命名、删除都会自动反映到手机。
 - 手机上的参数修改、重命名和删除会自动同步回服务端 Pocket 目录，无需手动上传。
 - 手机参数面板：提示词优先，输入图片上传、模型选项、数值、布尔值、随机种子、参数收藏和拖动排序。
