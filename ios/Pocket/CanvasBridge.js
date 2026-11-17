@@ -17,12 +17,42 @@
     return node;
   }
 
-  async function applyPrompt(app, prompt) {
+  function workspaceRestored(app) {
+    // setup() finishes before GraphCanvas restores persisted workflow tabs.
+    // These public stores cover both current and older frontend versions.
+    return app?.extensionManager?.workflow?.tabsRestored !== false && app?.extensionManager?.spinner !== true;
+  }
+
+  function graphMatchesWorkflow(graph, workflow) {
+    if (!graph || !Array.isArray(workflow?.nodes)) return false;
+    if (workflow.id && String(graph.id) !== String(workflow.id)) return false;
+    const ids = new Set((graph._nodes ?? []).map(n => String(n.id)));
+    return workflow.nodes.every(n => ids.has(String(n.id)));
+  }
+
+  function requireWorkflow(app, workflow) {
+    if (workflow && !graphMatchesWorkflow(app.rootGraph, workflow)) {
+      throw new Error("ComfyUI 恢复标签时切换了当前画布，已停止套用参数。请重新载入；原工作流未被覆盖。");
+    }
+  }
+
+  async function loadWorkflowGraph(app, workflow, name) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await app.loadGraphData(structuredClone(workflow), true, true, name);
+      if (graphMatchesWorkflow(app.rootGraph, workflow)) return;
+    }
+    requireWorkflow(app, workflow);
+  }
+
+  async function applyPrompt(app, prompt, workflow) {
+    requireWorkflow(app, workflow);
     const before = await executablePrompt(app, prompt);
+    requireWorkflow(app, workflow);
     for (const [id, spec] of Object.entries(prompt)) {
       for (const [name, value] of Object.entries(spec.inputs)) {
         if (equivalentInput(spec, before?.[id], name)) continue;
         const node = executionNode(app.rootGraph, id);
+        if (node?.type && node.type !== spec.class_type) continue;
         // Only actual widgets are assigned. Connections, dynamic structures and
         // custom serializers are never inferred from widget position.
         const widget = node?.widgets?.find(item => item.name === name);
@@ -32,9 +62,11 @@
         widget.value = value;
         node.onWidgetChanged?.(name, value, before?.[id]?.inputs?.[name], widget);
         await widget.callback?.(value, app.canvas, node, undefined, undefined);
+        requireWorkflow(app, workflow);
       }
     }
     const after = await executablePrompt(app, prompt);
+    requireWorkflow(app, workflow);
     const unmapped = [];
     for (const [id, spec] of Object.entries(prompt)) {
       if (after[id]?.class_type !== spec.class_type) { unmapped.push(`${id}.class_type`); continue; }
@@ -299,7 +331,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance };
+    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -349,7 +381,7 @@
       if (startup.failure) throw new Error(`ComfyUI 节点初始化失败：${startup.failure}`);
       // A graph object alone is too early. Follow actual setup completion, with
       // the public coordinate API for a bridge attached after setup has started.
-      if (app?.canvas && app?.rootGraph && app?.vueAppReady && (startup.complete || coordinatesReady(app)) && typeof app.loadGraphData === "function") {
+      if (app?.canvas && app?.rootGraph && app?.vueAppReady && (startup.complete || coordinatesReady(app)) && workspaceRestored(app) && typeof app.loadGraphData === "function") {
         // Keep the real graph and plugin DOM widgets mounted. Pocket supplies
         // navigation and the node wheel; desktop chrome must not consume its viewport.
         if (app.extensionManager?.focusMode === false) app.extensionManager.toggleFocusMode?.();
@@ -359,7 +391,9 @@
         textEditor = installTextEditing(app);
         return app;
       }
-      const message = startup.registered ? "节点已加载，正在初始化扩展控件…" : "正在加载 ComfyUI 节点与扩展…";
+      const message = (startup.complete || coordinatesReady(app)) && !workspaceRestored(app)
+        ? "正在等待 ComfyUI 恢复工作流标签…"
+        : startup.registered ? "节点已加载，正在初始化扩展控件…" : "正在加载 ComfyUI 节点与扩展…";
       if (message !== previousMessage) { send("loading", { message }); previousMessage = message; }
       await new Promise(resolve => setTimeout(resolve, 200));
     }
@@ -496,15 +530,16 @@
             if (["string", "number", "boolean"].includes(typeof field)) node.properties[key] = field;
           }
         }
-        await app.loadGraphData(value.workflow, true, true, value.name);
+        await loadWorkflowGraph(app, value.workflow, value.name);
         await new Promise(resolve => setTimeout(resolve, 0));
+        requireWorkflow(app, value.workflow);
         restoreExecutionModes(app, value.prompt);
-        let unmapped = await applyPrompt(app, value.prompt);
+        let unmapped = await applyPrompt(app, value.prompt, value.workflow);
         // Third-party widgets may finish configuration on animation frames.
         for (const delay of [100, 300]) {
           if (!unmapped.length) break;
           await new Promise(resolve => setTimeout(resolve, delay));
-          unmapped = await applyPrompt(app, value.prompt);
+          unmapped = await applyPrompt(app, value.prompt, value.workflow);
         }
         if (unmapped.length) {
           mismatch = true;
@@ -543,6 +578,10 @@
       if (textEditor?.editing) return null;
       const output = await executablePrompt(app, initialPrompt);
       if (textEditor?.editing) return null;
+      if (ownedGraphID && app.rootGraph.id !== ownedGraphID) {
+        send("foreignGraph");
+        throw new Error("导出期间画布切换到了其他工作流，已停止保存。请重新载入当前工作流。");
+      }
       return JSON.stringify({ prompt: output, workflow });
     },
     async command(name) {

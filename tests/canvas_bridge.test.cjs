@@ -2,6 +2,40 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { executionNode, applyPrompt, ports, connect, disconnect } = require('../ios/Pocket/CanvasBridge.js');
 const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
+const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
+
+test('graph loading retries a displaced restore and verifies identity before applying inputs', async () => {
+  const workflow = {id:'minimax',nodes:[{id:36,type:'Sampler'}]};
+  const app = {rootGraph:{id:'qwen',_nodes:[{id:36,type:'Other'}]}, async loadGraphData(graph) {
+    this.loads=(this.loads||0)+1;
+    if(this.loads===2)this.rootGraph={id:graph.id,_nodes:graph.nodes};
+  }};
+  await loadWorkflowGraph(app,workflow,'MiniMax');
+  assert.equal(app.loads,2);assert.equal(app.rootGraph.id,'minimax');
+  assert.equal(workflow.nodes[0].type,'Sampler');
+  app.loadGraphData=async()=>{app.rootGraph={id:'qwen',_nodes:[]};};
+  await assert.rejects(loadWorkflowGraph(app,workflow,'MiniMax'),/切换了当前画布/);
+});
+
+test('wrong workflow and reused IDs cannot receive another workflow parameters', async () => {
+  const f=fixture();f.source.type='Other';
+  f.app.graphToPrompt=async()=>({output:{'1':{class_type:'Other',inputs:{width:512}}}});
+  const prompt={'1':{class_type:'Source',inputs:{width:1024}}};
+  assert.deepEqual(await applyPrompt(f.app,prompt),['1.class_type']);
+  assert.equal(f.source.widgets[0].value,512);
+  await assert.rejects(applyPrompt(f.app,prompt,{id:'expected',nodes:[{id:1}]}),/切换了当前画布/);
+  assert.equal(f.source.widgets[0].value,512);
+});
+
+test('public frontend restoration state includes tabs and workspace spinner', () => {
+  assert.equal(workspaceRestored({}),true);
+  const app={extensionManager:{workflow:{tabsRestored:false},spinner:true}};
+  assert.equal(workspaceRestored(app),false);
+  app.extensionManager.workflow.tabsRestored=true;
+  assert.equal(workspaceRestored(app),false);
+  app.extensionManager.spinner=false;
+  assert.equal(workspaceRestored(app),true);
+});
 
 test('node appearance changes only draw arguments and restores the original renderer', () => {
   const node = { color: '#335533', bgcolor: '#446644', pos: [17, 25], size: [320, 240], widgets: [{value: 'prompt'}] };
@@ -236,6 +270,20 @@ test('startup follows actual setup completion when the frontend has no private c
   finishSetup();await setup;await new Promise(r=>setTimeout(r,220));
   assert.equal(messages.filter(m=>m.type==='ready').length,1);
   assert.equal(app.positionConversion,undefined);
+});
+
+test('ready is delayed until saved tabs finish restoring after setup', async () => {
+  const vm=require('node:vm'),fs=require('node:fs'),messages=[];
+  const app={canvas:{resize(){}},rootGraph:{id:'qwen'},vueAppReady:true,positionConversion:{},loadGraphData:async()=>{},
+    extensionManager:{workflow:{tabsRestored:false},spinner:true}};
+  const context={window:{addEventListener(){},comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{addEventListener(){},createElement:()=>({}),head:{append(){}}},setTimeout,clearTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
+  await new Promise(r=>setTimeout(r,230));
+  assert.equal(messages.some(m=>m.type==='ready'),false);
+  assert.ok(messages.some(m=>m.type==='loading'&&m.message.includes('恢复工作流标签')));
+  app.extensionManager.workflow.tabsRestored=true;app.extensionManager.spinner=false;
+  await new Promise(r=>setTimeout(r,220));
+  assert.equal(messages.filter(m=>m.type==='ready').length,1);
 });
 
 test('text input camera keeps the field readable inside keyboard and visual viewport bounds', () => {
