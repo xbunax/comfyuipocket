@@ -5,6 +5,8 @@ final class PocketStore {
     var profile: ServerProfile
     var workflows: [Workflow]
     var client: ComfyClient?
+    var irohTransport: IrohTransport?
+    var incomingPairingCode: String?
     var connected = false
     var connecting = false
     var socketConnected = false
@@ -95,7 +97,7 @@ final class PocketStore {
             "image": .array([.array([.string("sample.png")]), .object(["image_upload": .bool(true)])])
         ])])])])
         client = ComfyClient(baseURL: URL(string: "http://127.0.0.1:8188")!)
-        generationTasks = [GenerationTask(id: "ui-batch", server: client!.baseURL.absoluteString, workflowID: id,
+        generationTasks = [GenerationTask(id: "ui-batch", server: client!.serverID, workflowID: id,
             name: "UI Canvas Workflow", createdAt: 1, requestedCount: 2,
             items: [GenerationItem(id: "ui-done", prompt: prompt), GenerationItem(id: "ui-pending", prompt: prompt)])]
         history = .object(["ui-done": .object(["status": .object(["status_str": .string("success")])])])
@@ -141,11 +143,11 @@ final class PocketStore {
         }
     }
     var currentMediaArchive: MediaArchive {
-        guard let server = client?.baseURL.absoluteString else { return MediaArchive() }
+        guard let server = client?.serverID else { return MediaArchive() }
         return mediaArchives[server] ?? MediaArchive()
     }
     var currentGenerationTasks: [GenerationTask] {
-        guard let server = client?.baseURL.absoluteString else { return [] }
+        guard let server = client?.serverID else { return [] }
         let hidden = mediaArchives[server]?.deletedTaskIDs ?? []
         return generationTasks.filter { $0.server == server && !hidden.contains($0.id) }.sorted { $0.createdAt > $1.createdAt }
     }
@@ -190,13 +192,33 @@ final class PocketStore {
         let value = line.trimmingCharacters(in: .whitespaces)
         return value.isEmpty ? "未命名提示词" : String(value.prefix(30))
     }
-    func connect() async {
+    func connect(pairingCode: String? = nil) async {
         guard !connecting else { return }
         disconnect(); connecting = true
         let attempt = UUID(); lastConnection = attempt
         defer { if lastConnection == attempt { connecting = false } }
         do {
-            let next = ComfyClient(baseURL: try profile.baseURL())
+            let next: ComfyClient
+            if profile.connectionMethod == "iroh" {
+                let invite: PairingInvitation?
+                if let code = pairingCode?.nonEmpty { invite = try PairingInvitation.parse(code) }
+                else { invite = nil }
+                guard let peer = invite?.peer ?? profile.irohPeer else {
+                    throw PocketError.message("请先扫描或粘贴电脑上生成的配对码。")
+                }
+                let transport = IrohTransport(peer: peer, token: invite?.token)
+                irohTransport = transport
+                try await transport.start()
+                guard lastConnection == attempt else { transport.stop(); return }
+                profile.irohPeer = transport.peer; save()
+                guard let url = transport.baseURL, let access = transport.access else {
+                    throw PocketError.message("本地直连通道未就绪。")
+                }
+                next = ComfyClient(baseURL: url, serverID: peer.serverID, loopbackAccess: access,
+                                   displayAddress: "P2P · \(peer.name)")
+            } else {
+                next = ComfyClient(baseURL: try profile.baseURL())
+            }
             _ = try await next.json("system_stats")
             guard lastConnection == attempt else { return }
             client = next; connected = true; save()
@@ -212,13 +234,16 @@ final class PocketStore {
                 syncStatus = "未检测到 Pocket 插件"
                 notice = "未检测到 Pocket 插件，工作流自动同步已停用。"
             }
-        } catch { if lastConnection == attempt { self.error = error.localizedDescription } }
+        } catch {
+            if lastConnection == attempt { irohTransport?.stop(); irohTransport = nil; self.error = error.localizedDescription }
+        }
     }
     func disconnect() {
         lastConnection = UUID(); connecting = false
         events?.cancel(); events = nil; polling?.cancel(); polling = nil
         syncLoop?.cancel(); syncLoop = nil; pushTask?.cancel(); pushTask = nil
         client?.disconnect(); client = nil; connected = false; socketConnected = false
+        irohTransport?.stop(); irohTransport = nil
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
         preview = nil; progress = 0; activeNode = ""; activePrompt = ""
         pluginAvailable = false; syncing = false; syncStatus = "等待连接"
@@ -277,9 +302,10 @@ final class PocketStore {
             let q = try await api.json("queue")
             let h = try await api.json("history", query: [.init(name: "max_items", value: "200")])
             guard client === api else { return }
-            try mergeMedia(h, server: api.baseURL.absoluteString)
+            if let transport = irohTransport, profile.irohPeer != transport.peer { profile.irohPeer = transport.peer; save() }
+            try mergeMedia(h, server: api.serverID)
             queue = q; history = currentMediaArchive.visibleHistory(h)
-            restoreGenerationTasks(server: api.baseURL.absoluteString)
+            restoreGenerationTasks(server: api.serverID)
         } catch { if client === api { notice = "刷新失败：\(error.localizedDescription)" } }
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
@@ -293,7 +319,7 @@ final class PocketStore {
         busy = true; defer { busy = false }
         let total = max(1, min(count, 20))
         let taskID = UUID().uuidString
-        generationTasks.insert(GenerationTask(id: taskID, server: api.baseURL.absoluteString, workflowID: workflow.id,
+        generationTasks.insert(GenerationTask(id: taskID, server: api.serverID, workflowID: workflow.id,
                                               name: workflow.name, createdAt: Date().timeIntervalSince1970,
                                               requestedCount: total, submitting: true), at: 0)
         saveGenerationTasks()
@@ -349,7 +375,7 @@ final class PocketStore {
         do {
             guard let api = client else { return }
             _ = try await api.json("queue", method: "POST", body: .object(["delete": .array([.string(id)])]))
-            for index in generationTasks.indices where generationTasks[index].server == api.baseURL.absoluteString {
+            for index in generationTasks.indices where generationTasks[index].server == api.serverID {
                 if let child = generationTasks[index].items.firstIndex(where: { $0.id == id }) { generationTasks[index].items[child].cancelled = true }
             }
             saveGenerationTasks(); await refresh()
@@ -361,7 +387,7 @@ final class PocketStore {
         catch { self.error = error.localizedDescription }
     }
     func cancelPending(in task: GenerationTask) async {
-        guard let api = client, !task.submitting, task.server == api.baseURL.absoluteString else { return }
+        guard let api = client, !task.submitting, task.server == api.serverID else { return }
         let ids = task.items.map(\.id).filter { isPending($0) }
         guard !ids.isEmpty else { return }
         do {

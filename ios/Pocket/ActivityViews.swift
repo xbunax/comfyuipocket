@@ -389,7 +389,7 @@ struct GalleryView: View {
                 PocketBackground()
                 if section == "output" {
                     OutputBrowserView(onPreview: { output, record in preview(output, record: record, allowDeletion: false) })
-                        .id(store.client?.baseURL.absoluteString ?? "")
+                        .id(store.client?.serverID ?? "")
                 } else if groups.isEmpty {
                     ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
                 } else {
@@ -424,7 +424,7 @@ struct GalleryView: View {
                 }
                 .sheet(item: $sheetOutput) { ImageDetail(output: $0, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord) }
                 .workDeletionDialog($removing)
-                .onChange(of: store.client?.baseURL) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; selectedRecord = nil; sizes = [:] }
+                .onChange(of: store.client?.serverID) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; selectedRecord = nil; sizes = [:] }
                 .onChange(of: store.images.map(\.id)) { _, ids in
                     if selectionAllowsDeletion, let selected, !ids.contains(selected.id) { self.selected = nil; sheetOutput = nil }
                 }
@@ -435,7 +435,7 @@ struct GalleryView: View {
             if let selected {
                 ImageDetail(output: selected, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord,
                             onClose: { self.selected = nil })
-                    .id("\(store.client?.baseURL.absoluteString ?? "")|\(selected.id)")
+                    .id("\(store.client?.serverID ?? "")|\(selected.id)")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView("选择图片或视频", systemImage: "photo.on.rectangle.angled",
@@ -448,7 +448,7 @@ struct GalleryView: View {
             if wide { sheetOutput = nil }
             else if let selected { sheetOutput = selected }
         }
-        .task(id: "\(store.client?.baseURL.absoluteString ?? "")|\(section)|\(sortKey)|\(sizeRefresh)|\(store.images.map(\.id).joined(separator: "|"))") {
+        .task(id: "\(store.client?.serverID ?? "")|\(section)|\(sortKey)|\(sizeRefresh)|\(store.images.map(\.id).joined(separator: "|"))") {
             guard section == "tasks", order == .size, let api = store.client else { readingSizes = false; return }
             readingSizes = true
             let result = await api.mediaSizes(store.images)
@@ -534,12 +534,12 @@ struct RemoteImage: View {
             }
             else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary) }
             else { ProgressView() }
-        }.task(id: "\(store.client?.baseURL.absoluteString ?? "")|\(output.id)") {
+        }.task(id: "\(store.client?.serverID ?? "")|\(output.id)") {
             image = nil; failed = false
             do {
                 guard let api = store.client else { failed = true; return }
                 let decoded = try await MediaThumbnail.cached(url: api.mediaURL(output), revision: output.promptID,
-                    kind: output.isVideo ? .video : .image) { try await api.image(output) }
+                    kind: output.isVideo ? .video : .image, resource: api.cacheResource(api.mediaURL(output))) { try await api.image(output) }
                 guard !Task.isCancelled else { return }
                 image = decoded
             } catch { if !Task.isCancelled { failed = true } }

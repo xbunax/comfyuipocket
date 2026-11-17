@@ -3,8 +3,8 @@ import Foundation
 struct CanvasCacheKey: Hashable {
     let server: String
     let workflowID: String
-    init(baseURL: URL, workflowID: String) {
-        server = baseURL.absoluteString
+    init(baseURL: URL, workflowID: String, serverID: String? = nil) {
+        server = serverID ?? baseURL.absoluteString
         self.workflowID = workflowID
     }
 }

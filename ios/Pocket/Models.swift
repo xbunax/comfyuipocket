@@ -6,7 +6,7 @@ enum PocketError: LocalizedError {
     var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
 }
 
-enum JSONValue: Codable, Equatable {
+enum JSONValue: Codable, Equatable, Sendable {
     case string(String), integer(Int64), unsigned(UInt64), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -52,6 +52,8 @@ struct ServerProfile: Codable, Equatable {
     var host = ""
     var port = "8188"
     var https = false
+    var connectionMethod: String? = nil
+    var irohPeer: IrohPeerProfile? = nil
     func baseURL() throws -> URL {
         let raw = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let ip = raw.hasPrefix("[") && raw.hasSuffix("]") ? String(raw.dropFirst().dropLast()) : raw

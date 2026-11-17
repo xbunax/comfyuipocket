@@ -7,9 +7,9 @@ import UniformTypeIdentifiers
 import ImageIO
 
 @MainActor enum MediaThumbnail {
-    static func cached(url: URL, revision: String, kind: MediaKind, lifetime: TimeInterval = 7 * 86400,
+    static func cached(url: URL, revision: String, kind: MediaKind, lifetime: TimeInterval = 7 * 86400, resource: String? = nil,
                        load: @escaping @MainActor @Sendable () async throws -> Data) async throws -> UIImage {
-        let key = MediaCacheKey(resource: MediaCacheKey.resource(url), variant: "thumbnail:\(revision)")
+        let key = MediaCacheKey(resource: resource ?? MediaCacheKey.resource(url), variant: "thumbnail:\(revision)")
         let encoded = try await MediaCache.shared.data(for: key, lifetime: lifetime) { @MainActor in
             let bitmap: UIImage?
             if kind == .video { bitmap = await video(url) }
@@ -163,7 +163,7 @@ struct InputMediaPreview: View {
     @State private var quickLookURL: URL?
     @State private var showFull = false
     @State private var retry = 0
-    private var identity: String { "\(store.client?.baseURL.absoluteString ?? "")|\(value)|\(retry)" }
+    private var identity: String { "\(store.client?.serverID ?? "")|\(value)|\(retry)" }
     var body: some View {
         Button {
             if failed { retry += 1 }
@@ -209,12 +209,12 @@ struct InputMediaPreview: View {
             let decoded: UIImage?
             if kind == .video {
                 // AVFoundation requests the first frame with HTTP range requests.
-                decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .video, lifetime: 60) {
+                decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .video, lifetime: 60, resource: api.cacheResource(api.inputMediaURL(value))) {
                     try await api.inputMedia(value)
                 }
             } else {
                 if kind == .image {
-                    decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .image, lifetime: 60) {
+                    decoded = try await MediaThumbnail.cached(url: api.inputMediaURL(value), revision: "input", kind: .image, lifetime: 60, resource: api.cacheResource(api.inputMediaURL(value))) {
                         try await api.inputMedia(value)
                     }
                 }

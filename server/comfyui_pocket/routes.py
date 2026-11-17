@@ -59,11 +59,13 @@ async def read_json(request):
 
 def register_routes():
     routes = PromptServer.instance.routes
+    from .pairing_routes import register_pairing_routes
+    register_pairing_routes(PromptServer.instance, catalog_for, same_origin, read_json)
 
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort", "iroh-pairing"]})
 
     @routes.get("/pocket/v1/outputs")
     async def outputs(request):

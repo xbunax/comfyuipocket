@@ -235,11 +235,75 @@ async function loadList() {
   }
 }
 
+function pairingPanel(root) {
+  const section = element("section", "", root);
+  section.style.cssText = "border:1px solid #8885;border-radius:14px;padding:16px;display:grid;gap:12px";
+  element("h3", "手机 P2P 配对", section);
+  element("p", "仅直连 · 禁用中继。生成配对码后，在手机连接页选择 P2P 配对，扫描二维码或粘贴完整配对码。", section);
+  const status = element("p", "正在读取状态…", section);
+  status.setAttribute("role", "status");
+  const actions = element("div", "", section);
+  actions.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
+  const invite = element("button", "生成配对码", actions);
+  const refresh = element("button", "刷新设备", actions);
+  const stop = element("button", "关闭 P2P", actions);
+  const invitation = element("div", "", section);
+  const peers = element("div", "", section);
+  let working = false;
+  const post = (path, body = {}) => checked(`/pocket/v1/pairing/${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  const busy = (value) => { working = value; invite.disabled = refresh.disabled = stop.disabled = value; };
+  const load = async () => {
+    const value = await checked("/pocket/v1/pairing");
+    status.textContent = !value.available ? "缺少 P2P 依赖：请用 ComfyUI 的 Python 安装本插件 requirements.txt。"
+      : value.enabled ? "P2P 已开启 · 仅允许直连" : "P2P 已关闭，生成配对码时开启";
+    peers.replaceChildren();
+    for (const peer of value.peers ?? []) {
+      const row = element("div", "", peers);
+      row.style.cssText = "display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 0";
+      element("span", `${peer.id.slice(0, 12)}…${peer.id.slice(-6)} · ${peer.connected ? "已连接" : "已配对"}`, row);
+      const revoke = element("button", "取消授权", row);
+      revoke.onclick = () => run(async () => { await post("revoke", { id: peer.id }); await load(); });
+    }
+  };
+  const run = async (body) => {
+    if (working) return;
+    busy(true);
+    try { await body(); } catch (error) { status.textContent = error.message; }
+    finally { busy(false); }
+  };
+  invite.onclick = () => run(async () => {
+    invitation.replaceChildren();
+    const value = await post("invite");
+    await load();
+    element("p", `5 分钟内有效，仅可首次使用一次。截止 ${new Date(value.expiresAt * 1000).toLocaleTimeString()}。`, invitation);
+    if (value.qrPng) {
+      const image = element("img", "", invitation);
+      image.src = `data:image/png;base64,${value.qrPng}`; image.alt = "Pocket 配对二维码";
+      image.style.cssText = "display:block;width:min(100%,300px);background:white;margin:8px auto";
+    }
+    const code = element("textarea", "", invitation);
+    code.value = value.code; code.readOnly = true; code.rows = 4;
+    code.style.cssText = "box-sizing:border-box;width:100%;font:11px monospace;overflow-wrap:anywhere";
+    code.setAttribute("aria-label", "完整配对码");
+    const copy = element("button", "复制配对码", invitation);
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(value.code); copy.textContent = "已复制"; }
+      catch { code.focus(); code.select(); copy.textContent = "已选中，请复制"; }
+    };
+  });
+  refresh.onclick = () => run(load);
+  stop.onclick = () => run(async () => { await post("stop"); invitation.replaceChildren(); await load(); });
+  run(load);
+}
+
 function panel(container) {
   container.replaceChildren();
   const root = element("div", "", container);
   root.style.cssText = "padding:20px;display:flex;flex-direction:column;gap:14px;overflow:auto;height:100%;box-sizing:border-box";
   element("h2", "ComfyUI Pocket", root);
+  pairingPanel(root);
   element("p", "ComfyUI 中保存的所有工作流都会自动同步到手机，无需逐个选择。手机上的参数修改也会自动同步回来。", root);
 
   const toggleRow = element("label", "", root);

@@ -10,7 +10,7 @@ enum TaskRemovalTarget: Identifiable {
 extension PocketStore {
     func deleteTask(_ target: TaskRemovalTarget) async -> Bool {
         guard let api = client else { error = "请先连接服务器。"; return false }
-        let server = api.baseURL.absoluteString
+        let server = api.serverID
         let task: GenerationTask
         switch target {
         case .task(let value): task = value
@@ -52,7 +52,7 @@ extension PocketStore {
     }
     func removeOutput(_ output: OutputImage, deleteFile: Bool) async -> Bool {
         guard let api = client else { error = "请先选择服务器。"; return false }
-        let server = api.baseURL.absoluteString
+        let server = api.serverID
         guard !deletingOutputs.contains(output.id) else { return false }
         deletingOutputs.insert(output.id); defer { deletingOutputs.remove(output.id) }
         do {
@@ -67,7 +67,7 @@ extension PocketStore {
             var archive = mediaArchives[server] ?? MediaArchive()
             archive.remove(output)
             mediaArchives[server] = archive; try persistMediaArchives()
-            await MediaCache.shared.invalidate(resource: MediaCacheKey.resource(api.mediaURL(output)))
+            await MediaCache.shared.invalidate(resource: api.cacheResource(api.mediaURL(output)))
             if client === api { notice = deleteFile ? "已删除服务器文件并清理缓存。" : "已从本机作品中移除。" }
             return true
         } catch { self.error = error.localizedDescription; return false }

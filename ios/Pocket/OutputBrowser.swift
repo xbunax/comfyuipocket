@@ -60,7 +60,7 @@ struct OutputBrowserView: View {
                 }.contentMargins(.bottom, 28, for: .scrollContent).refreshable { await load() }
             }
         }
-        .task(id: "\(store.client?.baseURL.absoluteString ?? "")|\(available)|\(folder)|\(sortKey)|\(ascending)") { await load() }
+        .task(id: "\(store.client?.serverID ?? "")|\(available)|\(folder)|\(sortKey)|\(ascending)") { await load() }
         .edgeSwipeBack(enabled: !folder.isEmpty) { folder = folder.split(separator: "/").dropLast().joined(separator: "/") }
         .sheet(item: $selected) { output in
             ImageDetail(output: output, allowDeletion: false, knownRecord: provenance(output))

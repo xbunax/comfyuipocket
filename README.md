@@ -113,3 +113,14 @@ python scripts/package_plugin.py
 ## 参考与许可
 
 交互目标参考 ComfyLink；本项目独立实现，不复制其品牌、素材或云服务协议。使用 [ComfyUI 官方 API](https://docs.comfy.org/development/comfyui-server/comms_routes)、[Apple Liquid Glass](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)、[Tailscale iOS](https://tailscale.com/download/ios)。本项目 MIT，第三方组件保留各自许可证。
+
+## Optional P2P pairing (v0.13.0)
+
+The connection page offers IP and P2P tabs. Update the computer plugin to 0.9.0,
+install its requirements.txt with ComfyUI's Python, then generate an invitation
+in the Pocket sidebar. Scan the QR or paste the entire code on the phone within
+five minutes. Saved phones reconnect without a new code; the desktop can revoke
+access or disable P2P. Both iroh endpoints disable relay transport for their full
+lifetime. When a direct UDP path cannot be established, the app reports failure.
+Public discovery may be used to find addresses; application traffic never relays.
+See [network behavior](docs/NETWORKING.md) for transport, identity and test details.

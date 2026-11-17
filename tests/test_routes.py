@@ -41,6 +41,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         folder_paths.get_public_user_directory = lambda user: str(root / user)
         folder_paths.get_output_directory = lambda: str(root / "output")
         folder_paths.get_temp_directory = lambda: str(root / "temp")
+        folder_paths.get_user_directory = lambda: str(root)
         self.media_root = root / "output"
         self.media_root.mkdir()
         sys.modules["folder_paths"] = folder_paths
@@ -53,7 +54,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
 
         self.addCleanup(restore_folder_paths)
 
-        self.prompt_server = types.SimpleNamespace(routes=web.RouteTableDef(), user_manager=Users())
+        self.prompt_server = types.SimpleNamespace(routes=web.RouteTableDef(), user_manager=Users(), app=web.Application())
         previous = sys.modules.get("server")
         server = types.ModuleType("server")
         server.PromptServer = types.SimpleNamespace(instance=self.prompt_server)
@@ -70,7 +71,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
             spec.loader.exec_module(module)
         self.routes_module = sys.modules["pocket_test_plugin.routes"]
         self.routes_module.register_routes()
-        app = web.Application()
+        app = self.prompt_server.app
         app.add_routes(self.prompt_server.routes)
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
@@ -97,6 +98,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(second["nextOffset"])
         nested = await (await self.client.get("/pocket/v1/outputs", params={"folder": "相册"})).json()
         self.assertEqual(nested["entries"][0]["path"], "相册/图 1.PNG")
+
         self.assertEqual(nested["entries"][0]["subfolder"], "相册")
         self.assertEqual(nested["entries"][0]["size"], 5)
         empty = await (await self.client.get("/pocket/v1/outputs", params={"folder": "empty"})).json()
@@ -104,6 +106,20 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty["entries"], [])
         info = await (await self.client.get("/pocket/v1/info")).json()
         self.assertIn("output-browser", info["capabilities"])
+
+    async def test_pairing_is_opt_in_and_control_routes_reject_foreign_origins(self):
+        status = await (await self.client.get("/pocket/v1/pairing")).json()
+        self.assertFalse(status["enabled"])
+        self.assertTrue(status["directOnly"])
+        self.assertEqual(status["peers"], [])
+        for action in ("invite", "stop", "revoke"):
+            response = await self.client.post("/pocket/v1/pairing/" + action,
+                json={}, headers={"Origin": "https://other.example"})
+            self.assertEqual(response.status, 403)
+        self.assertEqual((await self.client.post("/pocket/v1/pairing/revoke", json={"id": "invalid"})).status, 400)
+        self.assertEqual((await self.client.post("/pocket/v1/pairing/stop", json={})).status, 200)
+        import folder_paths
+        self.assertFalse((pathlib.Path(folder_paths.get_user_directory()) / "pocket-pairing").exists())
 
     async def test_output_browser_rejects_invalid_paths_pages_and_unknown_users(self):
         for folder in ("../", "/", "a/../../", "C:/", "a\\b", "a/./b", "\x00"):

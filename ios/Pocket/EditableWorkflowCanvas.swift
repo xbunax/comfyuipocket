@@ -14,10 +14,10 @@ struct WorkflowCanvasHost: View {
         Group {
             if let api = store.client {
                 WorkflowCanvasView(workflowID: selectedID,
-                    session: store.canvasSessions.session(baseURL: api.baseURL, workflowID: selectedID),
+                    session: store.canvasSessions.session(baseURL: api.baseURL, workflowID: selectedID, serverID: api.serverID),
                     selectWorkflow: { selectedID = $0 }, onFinish: onFinish,
                     onShowParameters: onShowParameters.map { action in { action(selectedID) } })
-                    .id(CanvasCacheKey(baseURL: api.baseURL, workflowID: selectedID))
+                    .id(CanvasCacheKey(baseURL: api.baseURL, workflowID: selectedID, serverID: api.serverID))
             } else {
                 WorkflowCanvasView(workflowID: selectedID, session: CanvasSession(), selectWorkflow: { selectedID = $0 },
                     onFinish: onFinish, onShowParameters: onShowParameters.map { action in { action(selectedID) } })
@@ -185,7 +185,7 @@ struct WorkflowCanvasView: View {
             }
             .sheet(isPresented: $showNodes) { CanvasNodeLibrary(session: session) }
             .sheet(isPresented: $showPorts) { CanvasConnections(session: session) }
-            .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.baseURL.absoluteString ?? "") }
+            .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.serverID ?? "") }
             .sheet(isPresented: $showWorkflows) {
                 NavigationStack {
                     List(store.workflows) { item in
@@ -226,7 +226,7 @@ struct WorkflowCanvasView: View {
         VStack(spacing: 7) {
             HStack(spacing: 6) {
                 Circle().fill(store.connected ? Color.green : Color.secondary).frame(width: 5, height: 5)
-                Text(store.client?.baseURL.host ?? "未连接").lineLimit(1)
+                Text(store.client?.displayAddress ?? "未连接").lineLimit(1)
                 Spacer(minLength: 8)
                 Text(runStatus ?? (session.reused ? "缓存已就绪" : (working ? "保存中…" : "自动保存")))
                     .lineLimit(1).foregroundStyle(submissionStatus == nil ? Color.secondary : PocketPalette.accent)

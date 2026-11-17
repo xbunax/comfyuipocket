@@ -51,6 +51,10 @@ struct RootView: View {
             }.hidden().accessibilityHidden(true)
         }
         .workspaceLayoutReader()
+        .onOpenURL { url in
+            do { _ = try PairingInvitation.parse(url.absoluteString); store.incomingPairingCode = url.absoluteString; selectedTab = 3 }
+            catch { store.error = error.localizedDescription }
+        }
     }
 }
 
@@ -127,6 +131,7 @@ struct SyncBadge: View {
 
 struct ConnectionView: View {
     @Environment(PocketStore.self) private var store
+    @State private var pairingCode = ""
     var body: some View {
         @Bindable var store = store
         NavigationStack {
@@ -137,6 +142,16 @@ struct ConnectionView: View {
                         PocketConnectionSummary()
                     }.padding(.vertical, 8)
                 }
+                Section {
+                    Picker("连接方式", selection: Binding(get: { store.profile.connectionMethod == "iroh" ? "iroh" : "ip" },
+                        set: { store.profile.connectionMethod = $0; store.save() })) {
+                        Text("IP 连接").tag("ip")
+                        Text("P2P 配对").tag("iroh")
+                    }.pickerStyle(.segmented).disabled(store.connected || store.connecting)
+                }
+                if store.profile.connectionMethod == "iroh" {
+                    IrohPairingFields(code: $pairingCode)
+                } else {
                 Section("ComfyUI 服务器") {
                     TextField("IP 地址，例如 192.168.1.20", text: $store.profile.host)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
@@ -146,11 +161,12 @@ struct ConnectionView: View {
                     }
                     Toggle("HTTPS", isOn: $store.profile.https)
                 }.disabled(store.connected || store.connecting)
+                }
                 Section {
                     if store.connected {
                         Button("断开服务器", role: .destructive) { store.disconnect() }
                     } else {
-                        Button { Task { await store.connect() } } label: {
+                        Button { Task { await store.connect(pairingCode: pairingCode.nonEmpty) } } label: {
                             HStack { if store.connecting { ProgressView() }; Text(store.connecting ? "正在连接…" : "连接服务器").frame(maxWidth: .infinity) }
                         }.buttonStyle(.glassProminent).disabled(store.connecting)
                     }
@@ -178,6 +194,19 @@ struct ConnectionView: View {
             .pocketListSurface()
             .frame(maxWidth: 760).frame(maxWidth: .infinity).background(PocketBackground())
             .navigationTitle("连接")
+            .navigationBarTitleDisplayMode(.inline)
+            .task(id: store.incomingPairingCode) {
+                if let code = store.incomingPairingCode {
+                    pairingCode = code; store.incomingPairingCode = nil
+                    if !store.connected && !store.connecting { store.profile.connectionMethod = "iroh" }
+                    else { store.notice = "已读取新配对码，请先断开当前连接。" }
+                }
+            }
+            .onChange(of: store.connected) { _, connected in
+                if connected { pairingCode = "" }
+                else if !pairingCode.isEmpty { store.profile.connectionMethod = "iroh" }
+            }
+            .onChange(of: store.profile.irohPeer) { _, peer in if peer != nil { pairingCode = "" } }
         }
     }
 }

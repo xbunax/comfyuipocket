@@ -3,18 +3,28 @@ import Foundation
 @MainActor
 final class ComfyClient {
     let baseURL: URL
+    let serverID: String
+    let loopbackAccess: LoopbackAccess?
+    let displayAddress: String
     let clientID = UUID().uuidString
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var sizeCache: [String: (bytes: Int64?, expires: Date)] = [:]
     private var pendingSizes: [String: Task<Int64?, Never>] = [:]
-    init(baseURL: URL) {
+    init(baseURL: URL, serverID: String? = nil, loopbackAccess: LoopbackAccess? = nil, displayAddress: String? = nil) {
         self.baseURL = baseURL
+        self.serverID = serverID ?? baseURL.absoluteString
+        self.loopbackAccess = loopbackAccess
+        self.displayAddress = displayAddress ?? baseURL.host ?? baseURL.absoluteString
         let config = URLSessionConfiguration.ephemeral
+        if let loopbackAccess { config.httpAdditionalHeaders = ["X-Pocket-Local-Token": loopbackAccess.token] }
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
         config.waitsForConnectivity = false
         self.session = URLSession(configuration: config)
+    }
+    func cacheResource(_ url: URL) -> String {
+        loopbackAccess?.resource(url, serverID: serverID) ?? MediaCacheKey.resource(url)
     }
     func url(_ path: String, query: [URLQueryItem] = []) -> URL {
         var c = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
@@ -90,11 +100,12 @@ final class ComfyClient {
         return result
     }
     func mediaURL(_ image: OutputImage) -> URL {
-        url("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])
+        let url = url("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])
+        return loopbackAccess?.mediaURL(url) ?? url
     }
     private func mediaData(_ url: URL, revision: String, lifetime: TimeInterval = 7 * 86400) async throws -> Data {
         let session = session
-        return try await MediaCache.shared.data(for: MediaCacheKey(resource: MediaCacheKey.resource(url), variant: "original:\(revision)"), lifetime: lifetime) {
+        return try await MediaCache.shared.data(for: MediaCacheKey(resource: cacheResource(url), variant: "original:\(revision)"), lifetime: lifetime) {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 throw PocketError.message("文件预览不可用。")
@@ -109,7 +120,8 @@ final class ComfyClient {
         let parts = MediaFile.split(value)
         var query = [URLQueryItem(name: "filename", value: parts.filename), .init(name: "type", value: parts.type)]
         if !parts.subfolder.isEmpty { query.append(.init(name: "subfolder", value: parts.subfolder)) }
-        return url("view", query: query)
+        let url = url("view", query: query)
+        return loopbackAccess?.mediaURL(url) ?? url
     }
     func download(_ image: OutputImage) async throws -> URL {
         if !image.isVideo {
@@ -138,7 +150,7 @@ final class ComfyClient {
         guard let name = json["name"].text.nonEmpty else { throw PocketError.message("图片上传没有返回文件名。") }
         let folder = json["subfolder"].text
         let value = folder.isEmpty ? name : "\(folder)/\(name)"
-        await MediaCache.shared.invalidate(resource: MediaCacheKey.resource(inputMediaURL(value)))
+        await MediaCache.shared.invalidate(resource: cacheResource(inputMediaURL(value)))
         return value
     }
     func listen(event: @escaping @MainActor (JSONValue) -> Void, preview: @escaping @MainActor (Data) -> Void, state: @escaping @MainActor (Bool) -> Void) async {

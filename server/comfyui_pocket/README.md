@@ -1,7 +1,21 @@
 # ComfyUI Pocket server plugin
 
 Copy this folder into `ComfyUI/custom_nodes/comfyui_pocket` and restart ComfyUI.
-No additional Python packages, external service, background upload, or model node is required.
+IP mode needs no extra packages or model node. Optional P2P pairing (plugin 0.9.0)
+requires installing this folder's requirements.txt using ComfyUI's Python:
+
+```powershell
+& '<ComfyUI>/.venv/Scripts/python.exe' -m pip install -r '<ComfyUI>/custom_nodes/comfyui_pocket/requirements.txt'
+```
+
+Open Pocket > 手机 P2P 配对 > 生成配对码, then scan the QR or paste the complete
+code in the app's P2P tab. Each invitation expires in five minutes and admits one
+new phone. Paired identities survive restarts; revoke devices or disable P2P in
+the sidebar. P2P starts only when requested, then resumes on restart until disabled.
+iroh relays are disabled on both endpoints for their entire lifetime. Discovery
+may contact iroh's public discovery services, but application traffic requires a
+direct UDP/QUIC path. Some NAT/mobile networks cannot connect; failure is explicit.
+This is a complete invitation code, not a six-digit lookup service.
 
 Open the **Pocket** sidebar in ComfyUI to see sync status. Every workflow saved under
 the ComfyUI user's `workflows/` directory is exported automatically — no per-workflow

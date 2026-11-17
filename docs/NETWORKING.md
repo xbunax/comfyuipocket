@@ -1,5 +1,36 @@
 # Network behavior
 
+## Optional iroh pairing (v0.13.0)
+
+Phone: URLSession/WKWebView/AVFoundation → authenticated 127.0.0.1 listener →
+iroh QUIC bidirectional stream → computer plugin → fixed loopback ComfyUI port.
+WebSockets, streaming uploads and video Range requests use this same path. The
+original graph/custom-node frontend remains intact. IP mode retains its own path.
+
+Both endpoints use iroh-ffi 1.2.0 with preset_n0_disable_relay plus RelayMode.disabled.
+Relays remain disabled during startup, reconnect and network changes. Public address
+discovery is enabled; payload never falls back to a relay. Do not call online(),
+which waits for relay readiness. Establishment has a 15-second deadline. Losing the
+direct path closes the connection; IP mode is an explicit user choice.
+
+The invitation contains a pinned endpoint ID, relay-free ticket and single-use
+256-bit enrollment secret, expiring after five minutes. Subsequent connections
+authenticate the saved QUIC peer identity. Phone secret keys live in Keychain;
+computer identity/allowlist lives in user/pocket-pairing/identity.json. Treat that
+file as private; it is outside the publicly served workflow catalog. No pairing
+codes or private keys are logged. New invitation replaces the previous invitation.
+
+Local proxy requests require a private header, HttpOnly cookie or private media
+path, plus exact loopback Host and same Origin when present. Local credentials
+are removed before forwarding. Ordinary HTTP sockets close after one request so
+every media path is validated; QUIC and upgraded WebSockets stay persistent.
+Caches, task history and workflows use iroH's stable endpoint ID, never its changing
+loopback port or private token. Different servers retain separate cache namespaces.
+
+Local integration tests cover real relay-disabled QUIC, HTTP, WebSocket text/binary,
+2 MiB upload/download, HEAD/Range, expired/used invitations, revoke and restart.
+Real cellular NAT traversal and iOS foreground/background behavior need device testing.
+
 ## Connecting
 
 LAN: `Swift URLSession → user's IP:port → ComfyUI`.
@@ -7,8 +38,8 @@ LAN: `Swift URLSession → user's IP:port → ComfyUI`.
 Tailscale: install the official Tailscale iOS app, sign in to the same tailnet as the
 computer, and enter the computer's Tailscale IP (usually `100.x.x.x`). iOS routes the
 request through the system VPN tunnel provided by the official app. Pocket contains no
-VPN implementation, no embedded node, no loopback proxy and no relay of its own. It
-contacts only the IP and port you enter.
+VPN implementation. In IP mode it contacts the IP and port you enter; optional
+iroh mode uses the separate transport described above.
 
 The official Tailscale app decides whether a connection is direct or relayed through
 DERP. Pocket has no visibility into or control over that choice; "no Pocket relay" does

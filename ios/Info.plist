@@ -13,6 +13,11 @@
   <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
   <key>NSLocalNetworkUsageDescription</key><string>通过你填写的 IP 和端口直接访问自己的 ComfyUI 服务器。</string>
   <key>NSPhotoLibraryAddUsageDescription</key><string>将生成的图片保存到照片图库。</string>
+  <key>NSCameraUsageDescription</key><string>扫描你自己电脑上的 ComfyUI Pocket 配对二维码。</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>com.xbunax.comfyuipocket.pairing</string>
+    <key>CFBundleURLSchemes</key><array><string>comfypocket</string></array>
+  </dict></array>
   <key>NSAppTransportSecurity</key><dict>
     <!-- User-selected ComfyUI servers may use HTTP on public IPv4/IPv6 addresses.
          Do not add fine-grained global ATS keys here: their presence overrides

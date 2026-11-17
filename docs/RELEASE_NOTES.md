@@ -1,19 +1,16 @@
-ComfyUI Pocket v0.12.1
+ComfyUI Pocket v0.13.0
 
-- Fix iPhone Mirroring remaining at the phone aspect ratio on supported systems:
-  build with Xcode 27.1 / iOS 27 SDK on the Apple silicon Xcode 27 runner. The
-  previous release added adaptive layout but was still linked with iOS 26 SDK,
-  which did not opt into the new freely resizable iPhone Mirroring behavior.
-- Check the actual archived app's SDK/Xcode metadata, scene lifecycle, universal
-  device family and full-screen flag before publishing. Isolate Swift caches by
-  the new toolchain. Keep iOS 26 as the minimum deployment target.
-- Clarify the layout setting: resizing the mirroring window independently in
-  width/height requires iOS 27, macOS 27 and supported iPhone hardware. Older
-  systems retain proportional scaling. The app follows the window size supplied
-  by the system; the layout preference does not resize the system window.
+- Add IP / P2P connection tabs. Pair with a computer-generated QR code, QR photo,
+  pasted complete invitation or comfypocket link; retain saved peer identity.
+- Integrate official iroh-ffi 1.2.0 on iOS and Python. Disable relay transport on
+  both endpoints throughout connection/reconnection; report direct-path failure.
+- Add opt-in desktop pairing management, five-minute single-use invitations,
+  persistent authorization, device revocation and P2P shutdown.
+- Carry HTTP, original custom-node canvas, WebSockets, uploads and media Range
+  requests over authenticated QUIC streams. Keep cache/task identity stable when
+  the phone's private loopback port changes.
+- Requires Pocket plugin 0.9.0 plus its optional P2P requirements. Existing IP
+  connections remain available. Preserve Xcode 27.1 and resizable mirror support.
 
-All v0.12.0 features are preserved, including direct default-view entry, compact
-artwork header, unified Output layouts, sorting and edge-swipe navigation.
-The Pocket plugin remains v0.8.0; no reinstall is required. Device IPA build only,
-without simulator tests. Sign/install the new IPA, reopen iPhone Mirroring and
-check arbitrary window resizing on the supported iPhone/Mac.
+Device IPA build only; no simulator tests. Real iPhone/cellular direct-path
+availability depends on network/NAT conditions and must be checked on the device.
