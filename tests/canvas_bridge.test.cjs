@@ -134,10 +134,12 @@ test('wheel focus fits tall and wide nodes within both viewport axes without edi
 });
 test('canvas bridge waits for complete frontend setup instead of the first graph object', async () => {
   const vm=require('node:vm'),fs=require('node:fs');const messages=[];
-  const app={canvas:{},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{}};
-  const context={window:{comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{createElement:()=>({}),head:{append(){}}},setTimeout};
+  let resized=false;
+  const app={canvas:{resize:()=>{resized=true;}},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{},extensionManager:{focusMode:false,toggleFocusMode(){this.focusMode=true;}}};
+  const context={window:{comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{createElement:()=>({}),head:{append(){}}},setTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
   vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
   await new Promise(r=>setTimeout(r,50));assert.equal(messages.some(m=>m.type==='ready'),false);
   app.positionConversion={};await new Promise(r=>setTimeout(r,200));
   assert.equal(messages.filter(m=>m.type==='ready').length,1);
+  assert.equal(app.extensionManager.focusMode,true);assert.equal(resized,true);
 });

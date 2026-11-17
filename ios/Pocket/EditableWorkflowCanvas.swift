@@ -7,8 +7,8 @@ struct WorkflowCanvasView: View {
     @Environment(PocketStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var session = CanvasSession()
-    @State private var customControls = false
-    @State private var overview = false
+    @State private var canvasSize = CGSize.zero
+    @State private var showCanvasTools = false
     @State private var showMismatch = false
     @State private var showNodes = false
     @State private var showPorts = false
@@ -23,23 +23,13 @@ struct WorkflowCanvasView: View {
                 if store.connected, let api = store.client, let workflow {
                     ZStack {
                         CanvasWebView(session: session)
-                            .opacity(customControls ? 1 : 0.01)
-                            .allowsHitTesting(customControls && session.loaded)
-                            .accessibilityHidden(!customControls)
-                        if !customControls, session.available {
-                            if overview {
-                            MobileCanvas(session: session) { id in
-                                session.focusedNodeID = id
-                                customControls = true
-                                Task { await session.focusSelection() }
+                            .allowsHitTesting(session.loaded)
+                            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
+                            .task(id: canvasSize) {
+                                do { try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation() }
+                                catch { return }
+                                await session.refitViewport()
                             }
-                            } else {
-                                CanvasFocusedNode(session: session) {
-                                    customControls = true
-                                    Task { await session.focusSelection() }
-                                }
-                            }
-                        }
                         if session.loading {
                             ProgressView("正在准备节点与画布…").padding(20).background(.regularMaterial, in: .rect(cornerRadius: 18))
                         }
@@ -126,6 +116,9 @@ struct WorkflowCanvasView: View {
                 if case .failure(let error) = result { session.error = error.localizedDescription }
             }
             .interactiveDismissDisabled()
+            .onChange(of: session.loading) { _, loading in
+                if loading { showCanvasTools = false }
+            }
             .onDisappear {
                 if store.canvasEditingID == workflowID { store.canvasEditingID = nil }
                 session.webView?.stopLoading()
@@ -139,32 +132,35 @@ struct WorkflowCanvasView: View {
                 CanvasNodeWheel(session: session)
             }
             HStack {
-                Button(overview ? "节点视图" : "总览", systemImage: overview ? "rectangle" : "square.grid.2x2") {
-                    customControls = false; overview.toggle()
+                Button("总览", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    session.nodeFocusActive = false
+                    Task { await session.action("fit") }
                 }.disabled(!session.available)
                 Spacer()
-                Label(customControls ? "插件专用控件" : "触屏画布", systemImage: customControls ? "rectangle.and.hand.point.up.left" : "hand.point.up.left")
+                Button("聚焦节点", systemImage: "scope") {
+                    session.nodeFocusActive = true
+                    Task { await session.focusSelection() }
+                }.disabled(!session.available || session.focusedNodeID.isEmpty)
                 Spacer()
-                Button(customControls ? "返回触屏画布" : "专用控件") {
-                    customControls.toggle()
-                    Task {
-                        await session.refreshScene()
-                        try? await Task.sleep(for: .milliseconds(150))
-                        await session.focusSelection()
+                Menu {
+                    Toggle("画布浮动工具", isOn: $showCanvasTools)
+                    Button("缩小", systemImage: "minus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 0.75]) } }
+                    Button("放大", systemImage: "plus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 1.33]) } }
+                    if session.scene.nested {
+                        Button("返回主图", systemImage: "arrow.uturn.backward") {
+                            session.nodeFocusActive = false
+                            Task { await session.action("subgraph", arguments: ["id": ""]); await session.action("fit") }
+                        }
                     }
-                }
-            }.font(.caption).padding(.horizontal, 16).padding(.top, 8)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 16) {
+                    Divider()
                     Button("新增节点", systemImage: "plus") { showNodes = true }.accessibilityIdentifier("canvas.addNode")
                     Button("连接端口", systemImage: "point.3.connected.trianglepath.dotted") { showPorts = true }.accessibilityIdentifier("canvas.connect")
-                    if customControls {
-                    Button("适合屏幕", systemImage: "arrow.up.left.and.arrow.down.right") { Task { await session.action("fit") } }
-                    Button("缩小", systemImage: "minus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 0.75]) } }.labelStyle(.iconOnly)
-                    Button("放大", systemImage: "plus.magnifyingglass") { Task { await session.action("zoom", arguments: ["factor": 1.33]) } }.labelStyle(.iconOnly)
-                    }
-                }.font(.caption).buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 5)
-            }.disabled(!session.loaded || working)
+                } label: { Label("画布工具", systemImage: "slider.horizontal.3") }.disabled(!session.loaded || working)
+            }.font(.caption).buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 4)
+                .onChange(of: showCanvasTools) { _, enabled in
+                    guard session.loaded else { return }
+                    Task { await session.action("tools", arguments: ["enabled": enabled]) }
+                }
             HStack(spacing: 12) {
                 Text(session.loaded ? "自动保存" : "只读查看").font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -202,6 +198,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     var scene = MobileCanvasScene()
     var available = false
     var focusedNodeID = ""
+    var nodeFocusActive = false
     var mismatchFields: [String] = []
     var mutating = false
     var loading = true
@@ -236,7 +233,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         return web
     }
     func open(workflow: Workflow, baseURL: URL) {
-        self.baseURL = baseURL; loading = true; loaded = false; available = false; scene = MobileCanvasScene(); focusedNodeID = ""; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
+        self.baseURL = baseURL; loading = true; loaded = false; available = false; scene = MobileCanvasScene(); focusedNodeID = ""; nodeFocusActive = false; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
         do { initialText = String(decoding: try JSONEncoder().encode(workflow), as: UTF8.self) }
         catch { self.error = error.localizedDescription; loading = false; return }
         var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -257,6 +254,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "snapshot": "return await window.PocketCanvas.snapshot();", "load": "return await window.PocketCanvas.load(text);",
             "rebuild": "return await window.PocketCanvas.rebuild(name);", "command": "return await window.PocketCanvas.command(name);",
             "fit": "return window.PocketCanvas.fit();", "zoom": "return window.PocketCanvas.zoom(factor);",
+            "tools": "return window.PocketCanvas.tools(enabled);",
             "addNode": "return window.PocketCanvas.addNode(type);", "library": "return window.PocketCanvas.library();",
             "ports": "return window.PocketCanvas.ports();", "connect": "return window.PocketCanvas.connect(from, output, to, input);",
             "disconnect": "return window.PocketCanvas.disconnect(id, slot);"
@@ -294,9 +292,17 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         scene.nodes.sorted { a, b in a.y == b.y ? (a.x == b.x ? a.id.localizedStandardCompare(b.id) == .orderedAscending : a.x < b.x) : a.y < b.y }
     }
     func focusSelection() async {
-        guard available, !focusedNodeID.isEmpty else { return }
+        guard available, nodeFocusActive, !focusedNodeID.isEmpty else { return }
         do { _ = try await call("focus", arguments: ["id": focusedNodeID]) }
         catch { self.error = error.localizedDescription }
+    }
+    func refitViewport() async {
+        guard available else { return }
+        if nodeFocusActive { await focusSelection() }
+        else {
+            do { _ = try await call("fit") }
+            catch { self.error = error.localizedDescription }
+        }
     }
     private func trusted(_ url: URL?) -> Bool {
         guard let url, let baseURL else { return false }

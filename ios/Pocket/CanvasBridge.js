@@ -230,7 +230,14 @@
       app = window.comfyAPI?.app?.app;
       // positionConversion is installed at the END of ComfyApp.setup, after
       // registerNodes and extension setup. vueAppReady alone is too early.
-      if (app?.canvas && app?.rootGraph && app?.vueAppReady && app?.positionConversion && typeof app.loadGraphData === "function") return app;
+      if (app?.canvas && app?.rootGraph && app?.vueAppReady && app?.positionConversion && typeof app.loadGraphData === "function") {
+        // Keep the real graph and plugin DOM widgets mounted. Pocket supplies
+        // navigation and the node wheel; desktop chrome must not consume its viewport.
+        if (app.extensionManager?.focusMode === false) app.extensionManager.toggleFocusMode?.();
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        app.canvas.resize?.();
+        return app;
+      }
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     throw new Error("ComfyUI 编辑器启动超时，请检查服务器连接并重试。");
@@ -372,6 +379,10 @@
     focus(id) {
       return focusNode(app, id);
     },
+    tools(enabled) {
+      document.documentElement.classList.toggle("pocket-canvas-compact", !enabled);
+      return true;
+    },
     subgraph(id) {
       if (!id) { app.canvas.setGraph(app.rootGraph); return true; }
       const node = nodeAt(app.canvas.graph, id);
@@ -384,7 +395,12 @@
   };
 
   const style = document.createElement("style");
-  style.textContent = `canvas { touch-action: none; } input, textarea, select { font-size: max(16px, 1em); }
+  document.documentElement?.classList?.add("pocket-canvas-compact");
+  style.textContent = `#graph-canvas-container { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100dvh !important; z-index: 2; }
+    #lazy-res-monitor, rgthree-progress-bar { display: none !important; }
+    .pocket-canvas-compact #graph-canvas-container .selection-toolbox,
+    .pocket-canvas-compact #graph-canvas-container [role="toolbar"]:has([data-testid="zoom-controls-button"]) { display: none !important; }
+    canvas { touch-action: none; } input, textarea, select { font-size: max(16px, 1em); }
     .litecontextmenu { max-height: 70dvh; overflow-y: auto; } .litecontextmenu .litemenu-entry { min-height: 36px; }
     html, body { overscroll-behavior: none; }`;
   document.head.append(style);

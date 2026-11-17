@@ -6,13 +6,16 @@ struct CanvasNodeWheel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("上下滚动选择节点").font(.caption).foregroundStyle(.secondary)
+                Text("上下滚动 · 定位原始节点").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let index = session.orderedNodes.firstIndex(where: { $0.id == session.focusedNodeID }) {
                     Text("\(index + 1) / \(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }.padding(.horizontal, 16).padding(.top, 6)
-            NodeWheelPicker(nodes: session.orderedNodes, selection: Binding(get: { session.focusedNodeID }, set: { session.focusedNodeID = $0 }))
+            NodeWheelPicker(nodes: session.orderedNodes, selection: Binding(get: { session.focusedNodeID }, set: {
+                session.nodeFocusActive = true
+                session.focusedNodeID = $0
+            }))
                 .frame(height: 94).clipped()
         }
         .task(id: session.focusedNodeID) {
@@ -68,65 +71,5 @@ private struct NodeWheelPicker: UIViewRepresentable {
             parent.selection = parent.nodes[row].id
             feedback.selectionChanged(); feedback.prepare()
         }
-    }
-}
-
-/// The focused node owns the available canvas area; the wheel stays outside it.
-struct CanvasFocusedNode: View {
-    let session: CanvasSession
-    let openCustom: () -> Void
-    @State private var editing: MobileCanvasWidget?
-    @State private var inspector: MobileCanvasNode?
-    private var node: MobileCanvasNode? { session.scene.nodes.first { $0.id == session.focusedNodeID } }
-    var body: some View {
-        Group {
-            if let node {
-                VStack(spacing: 0) {
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(node.title).font(.title3.bold()).lineLimit(2)
-                            Text("#\(node.id) · \(node.modeTitle) · \(node.widgets.count) 项参数").font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                        Button { inspector = node } label: { Image(systemName: "ellipsis.circle").font(.title3) }
-                            .accessibilityLabel("节点操作")
-                    }.padding(16).background(.regularMaterial)
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
-                            ForEach(node.widgets) { widget in field(widget, node: node) }
-                            Button("打开此节点的专用控件", systemImage: "rectangle.and.hand.point.up.left") { openCustom() }
-                                .buttonStyle(.glass).disabled(!session.loaded).padding(.vertical, 8)
-                            if node.widgets.isEmpty {
-                                Text("此节点使用连线、子图或专用控件。可在节点操作中查看详情。")
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }.padding(16)
-                    }.id(node.id)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            } else {
-                ContentUnavailableView("当前图中暂无节点", systemImage: "square.dashed", description: Text("可以新增节点，或返回主图查看其他节点。"))
-            }
-        }.background(Color(uiColor: .systemGroupedBackground))
-            .sheet(item: $editing) { widget in MobileWidgetEditor(session: session, nodeID: session.focusedNodeID, widget: widget) }
-            .sheet(item: $inspector) { node in MobileNodeInspector(session: session, nodeID: node.id, openCustom: openCustom) }
-    }
-    private func field(_ widget: MobileCanvasWidget, node: MobileCanvasNode) -> some View {
-        let field = WorkflowField(nodeID: node.id, key: widget.name, nodeTitle: node.title, classType: node.type, value: widget.value)
-        return Button { editing = widget } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(widget.name).font(.subheadline.weight(.medium))
-                    Spacer()
-                    Image(systemName: "pencil").font(.caption).foregroundStyle(.secondary)
-                }
-                if let kind = MediaFile.kind(for: field) {
-                    InputMediaPreview(value: widget.value.text, kind: kind).allowsHitTesting(false)
-                }
-                Text(widget.value.text.isEmpty ? "未填写" : widget.value.text)
-                    .font(MobileField.isPrompt(field) ? .body : .subheadline)
-                    .foregroundStyle(.secondary).lineLimit(MobileField.isPrompt(field) ? 8 : 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }.padding(16).foregroundStyle(.primary)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18))
-        }.buttonStyle(.plain).disabled(!session.loaded)
     }
 }
