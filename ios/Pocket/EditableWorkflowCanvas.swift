@@ -40,7 +40,7 @@ struct WorkflowCanvasView: View {
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
                             guard !Task.isCancelled else { return }
-                            if session.loaded, !working, !session.mutating {
+                            if session.loaded, !session.textEditing, !working, !session.mutating {
                                 await session.refreshScene(); _ = await save()
                             }
                         }
@@ -74,6 +74,10 @@ struct WorkflowCanvasView: View {
                     Button("完成") {
                         Task {
                             if !session.loaded { dismiss(); return }
+                            if session.textEditing {
+                                await session.action("finishText")
+                                session.textEditing = false
+                            }
                             if await save() { dismiss() }
                         }
                     }.disabled(working)
@@ -128,6 +132,15 @@ struct WorkflowCanvasView: View {
     }
     private var controls: some View {
         VStack(spacing: 8) {
+            if session.textEditing {
+                HStack {
+                    Label("编辑文本", systemImage: "text.cursor").font(.subheadline)
+                    Spacer()
+                    Button("完成输入", systemImage: "keyboard.chevron.compact.down") {
+                        Task { await session.action("finishText") }
+                    }.buttonStyle(.glass)
+                }.padding(.horizontal, 16).padding(.vertical, 8)
+            } else {
             if session.available {
                 CanvasNodeWheel(session: session)
             }
@@ -173,7 +186,7 @@ struct WorkflowCanvasView: View {
                 } label: { Label(store.busy ? "提交中" : "运行", systemImage: "play.fill") }
                     .buttonStyle(.glassProminent).disabled(store.busy)
             }.disabled(!session.loaded || working).padding(.horizontal, 16).padding(.bottom, 8)
-
+            }
         }.background(.regularMaterial)
     }
     private func command(_ name: String) { Task { await session.action("command", arguments: ["name": name]) } }
@@ -181,7 +194,7 @@ struct WorkflowCanvasView: View {
         guard !working, !session.mutating else { return false }
         working = true; defer { working = false }
         do {
-            let text = try await session.snapshot()
+            guard let text = try await session.snapshot() else { return false }
             if text != session.lastSaved {
                 let document = try JSONDecoder().decode(CanvasDocument.self, from: Data(text.utf8))
                 try store.applyCanvasDocument(document, to: workflowID)
@@ -199,6 +212,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     var available = false
     var focusedNodeID = ""
     var nodeFocusActive = false
+    var textEditing = false
     var mismatchFields: [String] = []
     var mutating = false
     var loading = true
@@ -233,7 +247,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         return web
     }
     func open(workflow: Workflow, baseURL: URL) {
-        self.baseURL = baseURL; loading = true; loaded = false; available = false; scene = MobileCanvasScene(); focusedNodeID = ""; nodeFocusActive = false; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
+        self.baseURL = baseURL; loading = true; loaded = false; available = false; textEditing = false; scene = MobileCanvasScene(); focusedNodeID = ""; nodeFocusActive = false; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
         do { initialText = String(decoding: try JSONEncoder().encode(workflow), as: UTF8.self) }
         catch { self.error = error.localizedDescription; loading = false; return }
         var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
@@ -255,17 +269,21 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "rebuild": "return await window.PocketCanvas.rebuild(name);", "command": "return await window.PocketCanvas.command(name);",
             "fit": "return window.PocketCanvas.fit();", "zoom": "return window.PocketCanvas.zoom(factor);",
             "tools": "return window.PocketCanvas.tools(enabled);",
+            "viewport": "return window.PocketCanvas.viewport();", "finishText": "return window.PocketCanvas.finishText();",
             "addNode": "return window.PocketCanvas.addNode(type);", "library": "return window.PocketCanvas.library();",
             "ports": "return window.PocketCanvas.ports();", "connect": "return window.PocketCanvas.connect(from, output, to, input);",
             "disconnect": "return window.PocketCanvas.disconnect(id, slot);"
         ]
-        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "fit", "zoom", "ports", "library", "subgraph"]
+        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "fit", "zoom", "ports", "library", "subgraph", "viewport", "finishText"]
         if !loaded && !readOnlyMethods.contains(method) { throw PocketError.message("请先解决画布参数差异，再进行修改。") }
         guard let script = scripts[method] else { throw PocketError.message("无效的画布操作。") }
         return try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page) ?? NSNull()
     }
-    func snapshot() async throws -> String {
-        guard let text = try await call("snapshot") as? String, text.utf8.count <= 20 * 1024 * 1024 else { throw PocketError.message("画布内容无效或超过 20 MB。") }
+    func snapshot() async throws -> String? {
+        guard !textEditing else { return nil }
+        let result = try await call("snapshot")
+        if result is NSNull { return nil }
+        guard let text = result as? String, text.utf8.count <= 20 * 1024 * 1024 else { throw PocketError.message("画布内容无效或超过 20 MB。") }
         return text
     }
     func action(_ name: String, arguments: [String: Any] = [:]) async {
@@ -292,12 +310,14 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         scene.nodes.sorted { a, b in a.y == b.y ? (a.x == b.x ? a.id.localizedStandardCompare(b.id) == .orderedAscending : a.x < b.x) : a.y < b.y }
     }
     func focusSelection() async {
-        guard available, nodeFocusActive, !focusedNodeID.isEmpty else { return }
+        guard available, !textEditing, nodeFocusActive, !focusedNodeID.isEmpty else { return }
         do { _ = try await call("focus", arguments: ["id": focusedNodeID]) }
         catch { self.error = error.localizedDescription }
     }
     func refitViewport() async {
         guard available else { return }
+        do { if try await call("viewport") as? Bool == true { return } }
+        catch { self.error = error.localizedDescription; return }
         if nodeFocusActive { await focusSelection() }
         else {
             do { _ = try await call("fit") }
@@ -311,6 +331,9 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let body = message.body as? [String: Any] else { return }
         switch body["type"] as? String {
+        case "textEditing":
+            textEditing = body["active"] as? Bool ?? false
+            if textEditing, let id = body["nodeID"] as? String, scene.nodes.contains(where: { $0.id == id }) { focusedNodeID = id }
         case "ready": Task { await action("load", arguments: ["text": initialText]) }
         case "loaded": loading = false; loaded = true; available = true; mismatch = nil; mismatchFields = []; Task { await refreshScene(); await focusSelection() }
         case "mismatch": loading = false; loaded = false; available = true; mismatch = body["message"] as? String; mismatchFields = body["fields"] as? [String] ?? []; Task { await refreshScene(); await focusSelection() }
@@ -324,7 +347,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { loading = false; self.error = error.localizedDescription }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loading = false; self.error = error.localizedDescription }
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { loaded = false; available = false; loading = false; error = "画布进程已暂停，请重新载入。已保存的修改仍在手机中。" }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { loaded = false; available = false; textEditing = false; loading = false; error = "画布进程已暂停，请重新载入。已保存的修改仍在手机中。" }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         dialog(webView, message: message, confirm: false) { _ in completionHandler() }
     }

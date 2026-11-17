@@ -214,9 +214,21 @@
     }
   }
 
+  function textInputCamera(bounds, viewport) {
+    const padding = 16;
+    const width = Math.max(1, viewport.width - padding * 2);
+    const height = Math.max(1, viewport.height - padding * 2);
+    const scale = Math.max(0.02, Math.min(4, width / Math.max(1, bounds.width)));
+    return {
+      scale, maxHeight: height / scale, fontSize: Math.max(16, 16 / scale),
+      offset: [-bounds.x + (viewport.x + padding + (width - bounds.width * scale) / 2) / scale,
+        -bounds.y + (viewport.y + padding) / scale]
+    };
+  }
+
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, restoreExecutionModes };
+    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, restoreExecutionModes, textInputCamera };
     return;
   }
 
@@ -225,6 +237,7 @@
   let loaded = false;
   let mismatch = false;
   let initialPrompt = null;
+  let textEditor;
   const ready = (async () => {
     for (let attempt = 0; attempt < 300; attempt++) {
       app = window.comfyAPI?.app?.app;
@@ -236,6 +249,7 @@
         if (app.extensionManager?.focusMode === false) app.extensionManager.toggleFocusMode?.();
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         app.canvas.resize?.();
+        textEditor = installTextEditing(app);
         return app;
       }
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -243,6 +257,111 @@
     throw new Error("ComfyUI 编辑器启动超时，请检查服务器连接并重试。");
   })();
   ready.then(() => send("ready")).catch(error => send("error", { message: error.message }));
+
+  function installTextEditing(app) {
+    let current = null, savedCamera = null, restoring = false;
+    let blurTimer, restoreTimer, resizeFrame;
+    const editable = target => {
+      if (!(target instanceof HTMLElement)) return null;
+      const field = target.closest('textarea, input, [contenteditable="true"]');
+      if (!field || field.disabled || field.readOnly || !app.canvasContainer.contains(field)) return null;
+      if (field.tagName === "INPUT" && !["text", "search", "url", "email", "tel", "password", "number"].includes(field.type)) return null;
+      return field;
+    };
+    function restoreField() {
+      if (!current) return;
+      current.field.classList.remove("pocket-canvas-text-edit");
+      for (const name of ["--pocket-input-height", "--pocket-input-font"]) current.field.style.removeProperty(name);
+      if (current.widget) {
+        if (current.hadHideOnZoom) current.widget.options.hideOnZoom = current.hideOnZoom;
+        else delete current.widget.options.hideOnZoom;
+      }
+      current = null;
+    }
+    function restoreSoon() {
+      clearTimeout(restoreTimer);
+      restoreTimer = setTimeout(() => {
+        if (current || !savedCamera) return;
+        const canvas = app.canvas;
+        canvas.ds.scale = savedCamera.scale;
+        canvas.ds.offset[0] = savedCamera.x; canvas.ds.offset[1] = savedCamera.y;
+        savedCamera = null; restoring = false;
+        canvas.setDirty(true, true);
+      }, 350);
+    }
+    function fitField() {
+      if (!current?.field.isConnected) return;
+      const canvas = app.canvas, rect = canvas.canvas.getBoundingClientRect();
+      const visual = window.visualViewport;
+      const left = Math.max(rect.left, visual?.offsetLeft ?? 0), top = Math.max(rect.top, visual?.offsetTop ?? 0);
+      const right = Math.min(rect.right, (visual?.offsetLeft ?? 0) + (visual?.width ?? window.innerWidth));
+      const bottom = Math.min(rect.bottom, (visual?.offsetTop ?? 0) + (visual?.height ?? window.innerHeight));
+      if (right - left < 32 || bottom - top < 48) return;
+      const camera = textInputCamera(current.bounds, { x: left - rect.left, y: top - rect.top, width: right - left, height: bottom - top });
+      current.field.style.setProperty("--pocket-input-height", `${camera.maxHeight}px`);
+      current.field.style.setProperty("--pocket-input-font", `${camera.fontSize}px`);
+      canvas.ds.scale = camera.scale;
+      canvas.ds.offset[0] = camera.offset[0]; canvas.ds.offset[1] = camera.offset[1];
+      canvas.setDirty(true, true);
+    }
+    function begin(field) {
+      clearTimeout(blurTimer); clearTimeout(restoreTimer);
+      if (current?.field === field) return;
+      const canvas = app.canvas, rect = field.getBoundingClientRect(), area = canvas.canvas.getBoundingClientRect();
+      if (!savedCamera) savedCamera = { scale: canvas.ds.scale, x: canvas.ds.offset[0], y: canvas.ds.offset[1] };
+      const bounds = { x: (rect.left - area.left) / canvas.ds.scale - canvas.ds.offset[0],
+        y: (rect.top - area.top) / canvas.ds.scale - canvas.ds.offset[1], width: rect.width / canvas.ds.scale };
+      restoreField(); restoring = false;
+      let owner, widget;
+      for (const node of canvas.graph?._nodes ?? []) {
+        const found = node.widgets?.find(w => w.element === field || w.element?.contains?.(field));
+        if (found) { owner = node; widget = found; break; }
+      }
+      current = { field, bounds, widget, hadHideOnZoom: widget ? Object.hasOwn(widget.options, "hideOnZoom") : false, hideOnZoom: widget?.options.hideOnZoom };
+      if (widget) widget.options.hideOnZoom = false;
+      field.classList.add("pocket-canvas-text-edit");
+      send("textEditing", { active: true, nodeID: owner ? String(owner.id) : "" });
+      fitField();
+    }
+    function end() {
+      if (!current) return;
+      restoreField(); restoring = true;
+      send("textEditing", { active: false });
+      restoreSoon();
+    }
+    function resized() {
+      if (current) {
+        fitField(); cancelAnimationFrame(resizeFrame);
+        resizeFrame = requestAnimationFrame(fitField);
+      } else if (restoring) restoreSoon();
+      return !!current || restoring;
+    }
+    document.addEventListener("focusin", event => { const field = editable(event.target); if (field) begin(field); }, true);
+    document.addEventListener("focusout", event => {
+      if (event.target !== current?.field) return;
+      clearTimeout(blurTimer);
+      blurTimer = setTimeout(() => {
+        const next = editable(document.activeElement);
+        if (next) begin(next); else end();
+      }, 60);
+    }, true);
+    window.addEventListener("resize", resized);
+    window.visualViewport?.addEventListener("resize", resized);
+    window.visualViewport?.addEventListener("scroll", resized);
+    return {
+      get editing() { return !!current; },
+      get busy() { return !!current || restoring; },
+      resized,
+      finish() { current?.field.blur(); end(); return true; },
+      reset() {
+        const field = current?.field;
+        restoreField(); savedCamera = null; restoring = false;
+        clearTimeout(blurTimer); clearTimeout(restoreTimer); cancelAnimationFrame(resizeFrame);
+        field?.blur();
+        if (field) send("textEditing", { active: false });
+      }
+    };
+  }
 
   const commands = {
     undo: "Comfy.Undo", redo: "Comfy.Redo", copy: "Comfy.Canvas.CopySelected",
@@ -252,6 +371,7 @@
   window.PocketCanvas = {
     async load(text) {
       await ready;
+      textEditor?.reset();
       const value = JSON.parse(text);
       loaded = false;
       initialPrompt = value.prompt;
@@ -293,14 +413,20 @@
     },
     async rebuild(name) {
       if (!initialPrompt) throw new Error("工作流尚未载入。");
+      textEditor?.reset();
       await app.loadApiJson(initialPrompt, name);
       mismatch = false; loaded = true;
       this.fit(); send("loaded"); return true;
     },
     async snapshot() {
+      // Serializers and virtual/custom widgets may update DOM. Leave them alone
+      // while an input or IME composition is active; the next autosave commits it.
+      if (textEditor?.editing) return null;
       if (!loaded || mismatch) throw new Error("画布尚未准备好保存。");
       const { workflow } = await app.graphToPrompt(app.rootGraph);
+      if (textEditor?.editing) return null;
       const output = await executablePrompt(app, initialPrompt);
+      if (textEditor?.editing) return null;
       return JSON.stringify({ prompt: output, workflow });
     },
     async command(name) {
@@ -315,6 +441,7 @@
       return true;
     },
     fit() {
+      if (textEditor?.busy) return true;
       const canvas = app.canvas, nodes = canvas.graph?._nodes ?? [];
       if (!nodes.length) return true;
       const minX = Math.min(...nodes.map(node => node.pos[0])) - 40;
@@ -377,13 +504,17 @@
       return change(app, graph => { graph.remove(node); return true; });
     },
     focus(id) {
+      if (textEditor?.busy) return true;
       return focusNode(app, id);
     },
+    viewport() { return textEditor?.resized() ?? false; },
+    finishText() { return textEditor?.finish() ?? true; },
     tools(enabled) {
       document.documentElement.classList.toggle("pocket-canvas-compact", !enabled);
       return true;
     },
     subgraph(id) {
+      textEditor?.reset();
       if (!id) { app.canvas.setGraph(app.rootGraph); return true; }
       const node = nodeAt(app.canvas.graph, id);
       if (!node?.subgraph) throw new Error("此节点没有子图。");
@@ -401,6 +532,8 @@
     .pocket-canvas-compact #graph-canvas-container .selection-toolbox,
     .pocket-canvas-compact #graph-canvas-container [role="toolbar"]:has([data-testid="zoom-controls-button"]) { display: none !important; }
     canvas { touch-action: none; } input, textarea, select { font-size: max(16px, 1em); }
+    .pocket-canvas-text-edit { font-size: var(--pocket-input-font) !important; }
+    textarea.pocket-canvas-text-edit { max-height: var(--pocket-input-height) !important; min-height: 0 !important; resize: none !important; box-sizing: border-box !important; }
     .litecontextmenu { max-height: 70dvh; overflow-y: auto; } .litecontextmenu .litemenu-entry { min-height: 36px; }
     html, body { overscroll-behavior: none; }`;
   document.head.append(style);

@@ -136,10 +136,22 @@ test('canvas bridge waits for complete frontend setup instead of the first graph
   const vm=require('node:vm'),fs=require('node:fs');const messages=[];
   let resized=false;
   const app={canvas:{resize:()=>{resized=true;}},rootGraph:{},vueAppReady:true,loadGraphData:async()=>{},extensionManager:{focusMode:false,toggleFocusMode(){this.focusMode=true;}}};
-  const context={window:{comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{createElement:()=>({}),head:{append(){}}},setTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
+  const context={window:{addEventListener(){},comfyAPI:{app:{app}},webkit:{messageHandlers:{pocketCanvas:{postMessage:m=>messages.push(m)}}}},document:{addEventListener(){},createElement:()=>({}),head:{append(){}}},setTimeout,requestAnimationFrame:callback=>setTimeout(callback,0)};
   vm.runInNewContext(fs.readFileSync(require.resolve('../ios/Pocket/CanvasBridge.js'),'utf8'),context);
   await new Promise(r=>setTimeout(r,50));assert.equal(messages.some(m=>m.type==='ready'),false);
   app.positionConversion={};await new Promise(r=>setTimeout(r,200));
   assert.equal(messages.filter(m=>m.type==='ready').length,1);
   assert.equal(app.extensionManager.focusMode,true);assert.equal(resized,true);
+});
+
+test('text input camera keeps the field readable inside keyboard and visual viewport bounds', () => {
+  const {textInputCamera}=require('../ios/Pocket/CanvasBridge.js');
+  for(const width of [120,400,1800]){
+    const field={x:950,y:-600,width};const viewport={x:10,y:25,width:373,height:180};
+    const camera=textInputCamera(field,viewport);
+    const x=(field.x+camera.offset[0])*camera.scale,y=(field.y+camera.offset[1])*camera.scale;
+    assert.ok(x>=25.99&&x+width*camera.scale<=367.01);
+    assert.ok(y>=40.99&&y+camera.maxHeight*camera.scale<=189.01);
+    assert.ok(camera.fontSize*camera.scale>=15.99);
+  }
 });
