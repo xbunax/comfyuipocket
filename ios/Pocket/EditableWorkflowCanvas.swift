@@ -48,6 +48,7 @@ struct WorkflowCanvasView: View {
     @State private var showMismatch = false
     @State private var showNodes = false
     @State private var showPorts = false
+    @State private var showBookmarks = false
     @State private var working = false
     @State private var exporting = false
     @State private var exportDocument = WorkflowDocument(data: Data())
@@ -68,13 +69,13 @@ struct WorkflowCanvasView: View {
                                 await session.refitViewport(size: canvasSize)
                             }
                         if session.loading {
-                            ProgressView(session.loadingMessage).padding(20).background(.regularMaterial, in: .rect(cornerRadius: 18))
+                            ProgressView(session.loadingMessage).padding(20).background(PocketPalette.surface, in: .rect(cornerRadius: 18))
                         }
                     }
                     if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
                         Divider()
                         CanvasNodeNavigator(session: session)
-                            .frame(width: 280).background(.regularMaterial)
+                            .frame(width: 280).background(PocketPalette.surface)
                     }
                     }
                     .task(id: api.baseURL) {
@@ -160,7 +161,7 @@ struct WorkflowCanvasView: View {
                             Spacer()
                             Button("重新载入") { if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL, force: true) } }
                         }.font(.caption).buttonStyle(.borderless)
-                    }.padding(12).background(.regularMaterial)
+                    }.padding(12).background(PocketPalette.surface)
                 }
                 }
             }
@@ -185,6 +186,10 @@ struct WorkflowCanvasView: View {
             }
             .sheet(isPresented: $showNodes) { CanvasNodeLibrary(session: session) }
             .sheet(isPresented: $showPorts) { CanvasConnections(session: session) }
+            .sheet(isPresented: $showBookmarks) {
+                CanvasBookmarkSheet(session: session)
+                    .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            }
             .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.serverID ?? "") }
             .sheet(isPresented: $showWorkflows) {
                 NavigationStack {
@@ -232,7 +237,7 @@ struct WorkflowCanvasView: View {
                     .lineLimit(1).foregroundStyle(submissionStatus == nil ? Color.secondary : PocketPalette.accent)
             }.font(.caption2)
             Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }.buttonStyle(.plain)
-        }.padding(.horizontal, 16).padding(.vertical, 8).background(.regularMaterial)
+        }.padding(.horizontal, 16).padding(.vertical, 8).background(PocketPalette.surface)
     }
     private var controls: some View {
         VStack(spacing: 0) {
@@ -262,12 +267,16 @@ struct WorkflowCanvasView: View {
                                 Image(systemName: wheelExpanded ? "chevron.down" : "chevron.up").font(.caption2)
                             }.font(.subheadline.weight(.medium))
                             Text("\(session.scene.nodes.count) 个节点 · \(layout.showsCanvasInspector ? "节点侧栏" : (wheelExpanded ? "上下滚动定位" : "点按展开轮盘"))")
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.caption2).foregroundStyle(PocketPalette.secondary).lineLimit(1)
                         }.frame(maxWidth: .infinity, minHeight: 36)
                     }.disabled(!session.available).accessibilityLabel("展开或收起节点轮盘")
+                    Button { showBookmarks = true } label: {
+                        Image(systemName: "star").frame(width: 44, height: 44)
+                    }.accessibilityLabel("收藏节点与快速定位").accessibilityIdentifier("canvas.bookmarks")
+                        .disabled(!session.available)
                     Button { Task { await session.setPanels(!session.showPanels) } } label: {
                         Image(systemName: "sidebar.left").frame(width: 36, height: 36)
-                            .foregroundStyle(session.showPanels ? PocketPalette.accent : Color.primary)
+                            .foregroundStyle(session.showPanels ? PocketPalette.accent : PocketPalette.text)
                     }.accessibilityLabel(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板").disabled(!session.available)
                     Menu {
                         Button("聚焦当前节点", systemImage: "scope") {
@@ -295,7 +304,7 @@ struct WorkflowCanvasView: View {
                         .accessibilityLabel("画布工具").disabled(!session.loaded || submitting)
                 }.buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 5)
             }
-        }.background(.regularMaterial)
+        }.background(PocketPalette.surface)
     }
     private func pollHardware(_ api: ComfyClient) async {
         var resourcesAvailable: Bool? = nil
@@ -451,6 +460,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "groupMode": "return window.PocketCanvas.groupMode(id, mode);",
             "nodeMode": "return window.PocketCanvas.nodeMode(id, mode);",
             "focus": "return window.PocketCanvas.focus(id);",
+            "focusBookmark": "return window.PocketCanvas.focusBookmark(path, id, type);",
             "subgraph": "return window.PocketCanvas.subgraph(id);",
             "snapshot": "return await window.PocketCanvas.snapshot();", "load": "return await window.PocketCanvas.load(text);",
             "rebuild": "return await window.PocketCanvas.rebuild(name);", "command": "return await window.PocketCanvas.command(name);",
@@ -462,7 +472,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "ports": "return window.PocketCanvas.ports();", "connect": "return window.PocketCanvas.connect(from, output, to, input);",
             "disconnect": "return window.PocketCanvas.disconnect(id, slot);"
         ]
-        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "fit", "zoom", "ports", "library", "subgraph", "viewport", "finishText", "chrome", "tools"]
+        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "focusBookmark", "fit", "zoom", "ports", "library", "subgraph", "viewport", "finishText", "chrome", "tools"]
         if !loaded && !readOnlyMethods.contains(method) { throw PocketError.message("请先解决画布参数差异，再进行修改。") }
         guard let script = scripts[method] else { throw PocketError.message("无效的画布操作。") }
         return try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page) ?? NSNull()
@@ -496,6 +506,19 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
     var orderedNodes: [MobileCanvasNode] {
         scene.nodes.sorted { a, b in a.y == b.y ? (a.x == b.x ? a.id.localizedStandardCompare(b.id) == .orderedAscending : a.x < b.x) : a.y < b.y }
+    }
+    func location(for node: MobileCanvasNode) -> CanvasNodeLocation? {
+        guard let path = scene.graphPath else { return nil }
+        return CanvasNodeLocation(path: path, nodeID: node.id, type: node.type, title: node.title)
+    }
+    func focusBookmark(_ location: CanvasNodeLocation) async -> Bool {
+        guard available, !textEditing else { return false }
+        do {
+            guard try await call("focusBookmark", arguments: ["path": location.path, "id": location.nodeID, "type": location.type]) as? Bool == true else { return false }
+            nodeFocusActive = true; focusedNodeID = location.nodeID
+            await refreshScene()
+            return true
+        } catch { self.error = error.localizedDescription; return false }
     }
     func focusSelection() async {
         guard available, !textEditing, nodeFocusActive, !focusedNodeID.isEmpty else { return }

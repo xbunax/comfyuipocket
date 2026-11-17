@@ -2,21 +2,32 @@ import SwiftUI
 
 /// Pointer-friendly navigation on larger windows; it moves the real canvas camera.
 struct CanvasNodeNavigator: View {
+    @Environment(PocketStore.self) private var store
     let session: CanvasSession
     @State private var search = ""
+    @State private var favoritesOnly = false
     private var nodes: [MobileCanvasNode] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return session.orderedNodes.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.id.localizedCaseInsensitiveContains(query) || $0.type.localizedCaseInsensitiveContains(query) }
+        return session.orderedNodes.filter { node in
+            let matches = query.isEmpty || node.title.localizedCaseInsensitiveContains(query) || node.id.localizedCaseInsensitiveContains(query) || node.type.localizedCaseInsensitiveContains(query)
+            guard matches, favoritesOnly else { return matches }
+            guard let key = session.cacheKey, let location = session.location(for: node) else { return false }
+            return store.nodeBookmarks.contains(server: key.server, workflowID: key.workflowID, location: location)
+        }
     }
     var body: some View {
         VStack(spacing: 8) {
             HStack {
                 Label("节点导航", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
                 Spacer()
-                Text("\(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text("\(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary)
             }.padding(.horizontal, 16).padding(.top, 16)
             TextField("搜索名称、类型或节点 ID", text: $search)
                 .textFieldStyle(.roundedBorder).padding(.horizontal, 12)
+            Picker("节点筛选", selection: $favoritesOnly) {
+                Text("全部节点").tag(false)
+                Text("已收藏").tag(true)
+            }.pickerStyle(.segmented).padding(.horizontal, 12)
             CanvasNodeWheel(session: session)
             HStack {
                 Button("上一个", systemImage: "chevron.up") { move(-1) }
@@ -25,25 +36,28 @@ struct CanvasNodeNavigator: View {
             }.font(.caption).buttonStyle(.borderless).padding(.horizontal, 16)
                 .disabled(session.orderedNodes.isEmpty || session.textEditing)
             List(nodes) { node in
+                HStack(spacing: 0) {
                 Button {
                     session.nodeFocusActive = true; session.focusedNodeID = node.id
                     Task { await session.focusSelection() }
                 } label: {
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(node.title).font(.subheadline.weight(.medium)).foregroundStyle(.primary)
-                            Text("#\(node.id) · \(node.type)").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                            Text(node.title).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text)
+                            Text("#\(node.id) · \(node.type)").font(.caption2).foregroundStyle(PocketPalette.secondary).lineLimit(2)
                         }
                         Spacer(minLength: 0)
                         if session.focusedNodeID == node.id { Image(systemName: "scope").foregroundStyle(PocketPalette.accent) }
                     }.padding(.vertical, 4).contentShape(Rectangle())
-                }.buttonStyle(.plain).listRowBackground(session.focusedNodeID == node.id ? PocketPalette.accent.opacity(0.1) : Color.clear)
+                }.buttonStyle(.plain).disabled(session.textEditing)
+                CanvasBookmarkButton(session: session, node: node)
+                }.listRowBackground(session.focusedNodeID == node.id ? PocketPalette.accent.opacity(0.1) : Color.clear)
                     .hoverEffect(.highlight)
             }.listStyle(.plain).scrollContentBackground(.hidden)
         }
     }
     private func move(_ offset: Int) {
-        let nodes = session.orderedNodes
+        let nodes = nodes
         guard !nodes.isEmpty else { return }
         let current = nodes.firstIndex { $0.id == session.focusedNodeID } ?? 0
         let next = min(nodes.count - 1, max(0, current + offset))
@@ -59,10 +73,10 @@ struct CanvasNodeWheel: View {
     var body: some View {
         VStack(spacing: 0) {
             if !compact { HStack {
-                Text("上下滚动 · 定位原始节点").font(.caption).foregroundStyle(.secondary)
+                Text("上下滚动 · 定位原始节点").font(.caption).foregroundStyle(PocketPalette.secondary)
                 Spacer()
                 if let index = session.orderedNodes.firstIndex(where: { $0.id == session.focusedNodeID }) {
-                    Text("\(index + 1) / \(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("\(index + 1) / \(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary)
                 }
             }.padding(.horizontal, 16).padding(.top, 6) }
             NodeWheelPicker(nodes: session.orderedNodes, selection: Binding(get: { session.focusedNodeID }, set: {
@@ -115,7 +129,7 @@ private struct NodeWheelPicker: UIViewRepresentable {
             label.text = "#\(node.id)  \(node.title)\(node.mode == 0 ? "" : " · \(node.modeTitle)")"
             label.textAlignment = .center; label.font = .preferredFont(forTextStyle: .subheadline)
             label.adjustsFontSizeToFitWidth = true; label.minimumScaleFactor = 0.75
-            label.textColor = node.mode == 0 ? .label : .secondaryLabel
+            label.textColor = node.mode == 0 ? UIColor(PocketPalette.text) : UIColor(PocketPalette.secondary)
             label.accessibilityLabel = "节点 \(node.id)，\(node.title)，\(node.modeTitle)"
             return label
         }

@@ -28,6 +28,7 @@ final class PocketStore {
     @ObservationIgnored let canvasSessions = CanvasSessionCache()
     var prompts: [SavedPrompt] = []
     var pinnedWorkflows: [String] = []
+    var nodeBookmarks = NodeBookmarkLibrary()
     var generationTasks: [GenerationTask] = []
     var mediaArchives: [String: MediaArchive] = [:]
     var pluginCapabilities: Set<String> = []
@@ -59,6 +60,8 @@ final class PocketStore {
         workflows = (try? JSONDecoder().decode([Workflow].self, from: Data(contentsOf: Self.libraryURL))) ?? []
         prompts = (try? JSONDecoder().decode([SavedPrompt].self, from: Data(contentsOf: Self.promptsURL))) ?? []
         pinnedWorkflows = UserDefaults.standard.stringArray(forKey: "pinnedWorkflows") ?? []
+        nodeBookmarks = UserDefaults.standard.data(forKey: "nodeBookmarks.v1")
+            .flatMap { try? JSONDecoder().decode(NodeBookmarkLibrary.self, from: $0) } ?? NodeBookmarkLibrary()
         generationTasks = (try? JSONDecoder().decode([GenerationTask].self, from: Data(contentsOf: Self.tasksURL))) ?? []
         mediaArchives = (try? JSONDecoder().decode([String: MediaArchive].self, from: Data(contentsOf: Self.mediaArchiveURL))) ?? [:]
         for index in generationTasks.indices { generationTasks[index].submitting = false }
@@ -152,6 +155,17 @@ final class PocketStore {
         return generationTasks.filter { $0.server == server && !hidden.contains($0.id) }.sorted { $0.createdAt > $1.createdAt }
     }
     func isPinned(_ id: String) -> Bool { pinnedWorkflows.contains(id) }
+    func toggleNodeBookmark(_ location: CanvasNodeLocation, key: CanvasCacheKey) {
+        nodeBookmarks.toggle(server: key.server, workflowID: key.workflowID, location: location)
+        persistNodeBookmarks()
+    }
+    func removeNodeBookmark(_ bookmark: NodeBookmark) {
+        nodeBookmarks.remove(bookmark.id); persistNodeBookmarks()
+    }
+    private func persistNodeBookmarks() {
+        do { UserDefaults.standard.set(try JSONEncoder().encode(nodeBookmarks), forKey: "nodeBookmarks.v1") }
+        catch { self.error = "节点收藏保存失败：\(error.localizedDescription)" }
+    }
     func togglePinned(_ id: String) {
         if let index = pinnedWorkflows.firstIndex(of: id) { pinnedWorkflows.remove(at: index) }
         else { pinnedWorkflows.insert(id, at: 0) }

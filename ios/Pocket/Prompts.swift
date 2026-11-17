@@ -37,12 +37,12 @@ struct PromptLibraryView: View {
                 if filtered.isEmpty {
                     Section {
                         VStack(spacing: 8) {
-                            Image(systemName: "text.book.closed").font(.largeTitle).foregroundStyle(.secondary)
+                            Image(systemName: "text.book.closed").font(.largeTitle).foregroundStyle(PocketPalette.secondary)
                             Text(store.prompts.isEmpty ? "还没有保存的提示词。" : "没有匹配的提示词。")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(PocketPalette.secondary)
                             if store.prompts.isEmpty {
                                 Text("在提示词编辑页点“保存新版本”，或点右上角新建。")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.caption).foregroundStyle(PocketPalette.secondary)
                             }
                         }.frame(maxWidth: .infinity).padding(.vertical, 24)
                     }
@@ -93,7 +93,7 @@ struct PromptLibraryView: View {
     private func row(_ prompt: SavedPrompt) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(prompt.title).font(.headline)
-            Text(prompt.text).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            Text(prompt.text).font(.caption).foregroundStyle(PocketPalette.secondary).lineLimit(3)
             if selectedAction != nil {
                 Label(replacing ? "点按替换当前提示词" : "点按追加到末尾",
                       systemImage: replacing ? "arrow.triangle.2.circlepath" : "text.append")
@@ -121,7 +121,7 @@ struct PromptEditorSheet: View {
                 }
                 if !text.isEmpty {
                     Section("预览") {
-                        Text(text).font(.caption).foregroundStyle(.secondary).lineLimit(6)
+                        Text(text).font(.caption).foregroundStyle(PocketPalette.secondary).lineLimit(6)
                     }
                 }
             }

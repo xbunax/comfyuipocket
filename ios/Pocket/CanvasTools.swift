@@ -18,7 +18,7 @@ struct CanvasNodeLibrary: View {
                 Button {
                     Task { await session.action("addNode", arguments: ["type": node.type]); dismiss() }
                 } label: {
-                    VStack(alignment: .leading) { Text(node.title); Text(node.category).font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Text(node.title); Text(node.category).font(.caption).foregroundStyle(PocketPalette.secondary) }
                 }
             }.navigationTitle("新增节点").searchable(text: $query, prompt: "搜索全部节点")
                 .toolbar { Button("取消") { dismiss() } }

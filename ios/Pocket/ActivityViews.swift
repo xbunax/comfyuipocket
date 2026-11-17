@@ -45,12 +45,12 @@ struct QueueView: View {
                         }
                         ProgressView(value: store.progress)
                         Text("当前采样进度 \(Int(store.progress * 100))% · 非整个批次总进度")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(PocketPalette.secondary)
                         Button("停止服务器当前生成", role: .destructive) { confirming = true }
                     }
                 }
                 Section("当前任务 · \(activeTasks.count + otherQueue.count)") {
-                    if activeTasks.isEmpty && otherQueue.isEmpty { Text("队列空闲，灵感随时开始。").foregroundStyle(.secondary) }
+                    if activeTasks.isEmpty && otherQueue.isEmpty { Text("队列空闲，灵感随时开始。").foregroundStyle(PocketPalette.secondary) }
                     ForEach(activeTasks) { task in taskRow(task) }
                     ForEach(Array(otherQueue.enumerated()), id: \.offset) { _, item in
                         let id = item.array[1].text
@@ -108,13 +108,13 @@ struct QueueView: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(summary.failed > 0 || task.submissionError != nil ? Color.orange : (summary.active ? PocketPalette.accent : Color.secondary))
                     .padding(.horizontal, 9).padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.04), in: .capsule)
+                    .background(PocketPalette.text.opacity(0.04), in: .capsule)
                 Text("成功 \(summary.completed) · 失败 \(summary.failed) · 取消 \(summary.cancelled)")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(PocketPalette.secondary)
                 if summary.active || task.submitting {
                     ProgressView(value: Double(summary.finished), total: Double(max(1, task.requestedCount)))
                     Text("已结束 \(summary.finished) / \(task.items.count)")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(PocketPalette.secondary)
                 }
             }.padding(.vertical, 8)
         }.tag(TaskNavigationTarget.batch(task.id)).swipeActions {
@@ -149,12 +149,12 @@ struct GenerationTaskDetailView: View {
                         ProgressView(value: Double(summary.finished), total: Double(max(1, task.requestedCount)))
                         if summary.unavailable > 0 {
                             Text("\(summary.unavailable) 项记录暂不可用；已保留提交时的参数。")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary)
                         }
                         if let error = task.submissionError { Text(error).foregroundStyle(.orange) }
                         if !task.submitting && task.items.count < task.requestedCount {
                             Text("未提交的生成不会自动重试，避免重复执行。")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary)
                         }
                     }
                     if task.items.contains(where: { $0.id == store.runningPromptID }), let data = store.preview, let image = UIImage(data: data) {
@@ -180,7 +180,7 @@ struct GenerationTaskDetailView: View {
                                 HStack {
                                     Text("第 \(index + 1) 次生成")
                                     Spacer()
-                                    Text(itemStatus(item)).font(.caption).foregroundStyle(.secondary)
+                                    Text(itemStatus(item)).font(.caption).foregroundStyle(PocketPalette.secondary)
                                 }
                             }
                         }
@@ -313,7 +313,7 @@ struct TaskDetailView: View {
                     ForEach(promptFields) { field in
                         VStack(alignment: .leading, spacing: 6) {
                             Text("\(field.nodeTitle) · \(field.key)")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary)
                             Text(field.value.text).textSelection(.enabled)
                         }.padding(.vertical, 4)
                     }
@@ -336,7 +336,7 @@ struct TaskDetailView: View {
             }
             if workflow == nil {
                 Section {
-                    Text("任务参数暂不可用，可能已被历史记录清理。").foregroundStyle(.secondary)
+                    Text("任务参数暂不可用，可能已被历史记录清理。").foregroundStyle(PocketPalette.secondary)
                 }
             }
         }
@@ -401,7 +401,7 @@ struct GalleryView: View {
                         }.padding(.horizontal, 20).padding(.top, 8)
                         if order == .size {
                             Text(readingSizes ? "正在读取文件大小…" : "按任务产物合计大小排序；无法读取大小的任务放在末尾。")
-                                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary).padding(.horizontal, 20)
                         }
                         LazyVStack(spacing: 14) {
                             ForEach(groups) { group in
@@ -482,18 +482,18 @@ private struct GalleryTaskCard: View {
                         RemoteImage(output: cover).frame(width: 64, height: 72).clipped().clipShape(.rect(cornerRadius: 12))
                     }
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(.primary)
-                        Text(group.summary).font(.caption).foregroundStyle(.secondary)
+                        Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(PocketPalette.text)
+                        Text(group.summary).font(.caption).foregroundStyle(PocketPalette.secondary)
                         if let bytes = MediaOrdering.totalSize(group.outputs, sizes: sizes) {
-                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.caption2).foregroundStyle(PocketPalette.secondary)
                         }
-                        Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(PocketPalette.secondary)
                         if group.createdAt > 1_000_000_000 {
                             Text(Date(timeIntervalSince1970: group.createdAt), format: .dateTime.month().day().hour().minute())
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.caption2).foregroundStyle(PocketPalette.secondary)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(PocketPalette.secondary)
                 }.padding(14).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityValue(expanded ? "已展开" : "已折叠")
                 .contextMenu { Button("复制任务 ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = group.taskID } }
@@ -506,7 +506,7 @@ private struct GalleryTaskCard: View {
                                 RemoteImage(output: image).frame(height: 150).clipped().clipShape(.rect(cornerRadius: 12))
                             }.buttonStyle(.plain)
                             HStack {
-                                Text(image.filename).font(.caption2).lineLimit(1).foregroundStyle(.secondary)
+                                Text(image.filename).font(.caption2).lineLimit(1).foregroundStyle(PocketPalette.secondary)
                                 Spacer(minLength: 0)
                                 Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
                                     .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.id))
@@ -515,8 +515,8 @@ private struct GalleryTaskCard: View {
                     }
                 }.padding(14)
             }
-        }.background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
-            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.05)))
+        }.background(PocketPalette.surface, in: .rect(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(PocketPalette.text.opacity(0.05)))
     }
 }
 
@@ -532,7 +532,7 @@ struct RemoteImage: View {
                 Image(uiImage: image).resizable().scaledToFit()
                 if output.isVideo { Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(.white).shadow(radius: 3) }
             }
-            else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary) }
+            else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(PocketPalette.secondary) }
             else { ProgressView() }
         }.task(id: "\(store.client?.serverID ?? "")|\(output.id)") {
             image = nil; failed = false
@@ -573,8 +573,8 @@ struct ImageDetail: View {
                 Spacer()
                 Text(output.filename).font(.caption).textSelection(.enabled).lineLimit(2)
                 HStack(spacing: 12) {
-                    if let resolution = fileInfo.resolution { Text(resolution).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-                    if !output.isVideo { Text("双指缩放 · 双击放大").font(.caption2).foregroundStyle(.secondary) }
+                    if let resolution = fileInfo.resolution { Text(resolution).font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary) }
+                    if !output.isVideo { Text("双指缩放 · 双击放大").font(.caption2).foregroundStyle(PocketPalette.secondary) }
                     Spacer()
                     Button("详情", systemImage: "info.circle") { showDetails = true }.font(.subheadline)
                 }.padding(.horizontal, 16)

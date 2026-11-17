@@ -8,6 +8,7 @@ struct PocketApp: App {
         WindowGroup {
             RootView().environment(store)
                 .tint(PocketPalette.accent)
+                .preferredColorScheme(PocketAppearance.shared.colorScheme)
                 .onChange(of: phase) { _, value in
                     if value == .active { Task { await store.resume() } }
                     else if value == .background { store.suspend() }
@@ -59,15 +60,17 @@ struct RootView: View {
 }
 
 enum PocketPalette {
-    static let accent = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemMint : .systemTeal
-    })
+    @MainActor static var accent: Color { PocketAppearance.shared.colorway.color }
+    @MainActor static var background: Color { PocketAppearance.shared.colorway.resolved(\.background) }
+    @MainActor static var surface: Color { PocketAppearance.shared.colorway.resolved(\.surface) }
+    @MainActor static var text: Color { PocketAppearance.shared.colorway.resolved(\.text) }
+    @MainActor static var secondary: Color { PocketAppearance.shared.colorway.resolved(\.secondary) }
+    @MainActor static var border: Color { PocketAppearance.shared.colorway.resolved(\.border) }
 }
 
 struct PocketBackground: View {
     var body: some View {
-        LinearGradient(colors: [PocketPalette.accent.opacity(0.07), Color(uiColor: .systemGroupedBackground), Color(uiColor: .systemGroupedBackground)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            .ignoresSafeArea()
+        PocketPalette.background.ignoresSafeArea()
     }
 }
 
@@ -75,8 +78,10 @@ struct PocketBackground: View {
 extension View {
     func pocketListSurface() -> some View {
         self.listStyle(.insetGrouped)
-            .listSectionSpacing(18)
+            .listSectionSpacing(14)
             .scrollContentBackground(.hidden)
+            .foregroundStyle(PocketPalette.text)
+            .toolbarBackground(PocketPalette.background, for: .navigationBar)
             .background(PocketBackground())
     }
 }
@@ -89,9 +94,9 @@ struct PocketMetric: View {
         HStack(spacing: 6) {
             Image(systemName: icon).foregroundStyle(PocketPalette.accent)
             Text("\(value)").fontWeight(.semibold).monospacedDigit()
-            Text(title).foregroundStyle(.secondary)
+            Text(title).foregroundStyle(PocketPalette.secondary)
         }.font(.caption).padding(.horizontal, 10).padding(.vertical, 7)
-            .background(Color.primary.opacity(0.04), in: .capsule)
+            .background(PocketPalette.text.opacity(0.04), in: .capsule)
             .accessibilityElement(children: .combine)
     }
 }
@@ -121,10 +126,10 @@ struct SyncBadge: View {
                 ProgressView().controlSize(.mini)
             } else {
                 Image(systemName: store.pluginAvailable ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle")
-                    .foregroundStyle(store.pluginAvailable ? .mint : .orange)
+                    .foregroundStyle(store.pluginAvailable ? PocketPalette.accent : Color.orange)
             }
             Text(store.connected ? store.syncStatus : "连接后自动同步工作流")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(PocketPalette.secondary)
         }
     }
 }
@@ -177,7 +182,7 @@ struct ConnectionView: View {
                             Text("ComfyUI 需监听手机能访问的网卡，例如 --listen 0.0.0.0 --port 8188。")
                             Text("ComfyUI 原生接口没有访问密码。仅在可信局域网内使用，不要把端口开放到公网。")
                             Text("连接后工作流会自动双向同步；直接导入 API JSON 和运行任务不依赖插件。")
-                        }.font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8)
+                        }.font(.footnote).foregroundStyle(PocketPalette.secondary).padding(.vertical, 8)
                     }
                 }
                 Section("偏好设置") {
@@ -185,7 +190,7 @@ struct ConnectionView: View {
                 }
                 Section("图片缓存") {
                     Text("自动复用图片和视频首帧预览，内存上限 32 MB，磁盘上限 256 MB。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(PocketPalette.secondary)
                     Button("清理图片缓存", systemImage: "arrow.clockwise") {
                         Task { await MediaCache.shared.clear(); store.notice = "图片缓存已清理。" }
                     }

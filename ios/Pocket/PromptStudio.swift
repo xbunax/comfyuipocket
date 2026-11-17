@@ -34,7 +34,7 @@ struct PromptInputEditor: View {
                     .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(PocketPalette.accent.opacity(0.15)))
             }
             HStack {
-                Text("\(text.count) 字符").font(.caption).foregroundStyle(.secondary)
+                Text("\(text.count) 字符").font(.caption).foregroundStyle(PocketPalette.secondary)
                 Spacer()
                 Button {
                     inputFocused = false
@@ -99,7 +99,7 @@ struct PromptStudioView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 12) {
                     if !context.isEmpty {
-                        Text(context).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(context).font(.caption).foregroundStyle(PocketPalette.secondary).lineLimit(2)
                     }
                     Toggle("词块编辑", isOn: mode)
                         .font(.subheadline.weight(.medium)).accessibilityIdentifier("promptBlockEditing")
@@ -110,7 +110,7 @@ struct PromptStudioView: View {
                         VStack(alignment: .leading, spacing: 20) {
                             PromptFunctionFilter(document: board, selection: $functionFilter)
                             Text("点按设置权重与翻译，长按拖动词块，拖起和落点变化时有触觉反馈。")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary)
                             if let functionFilter, board.words(matching: functionFilter).isEmpty {
                                 ContentUnavailableView("没有\(functionFilter.title)词块", systemImage: "line.3.horizontal.decrease",
                                     description: Text("可切换筛选，或在词块详情里更正功能。"))
@@ -123,7 +123,7 @@ struct PromptStudioView: View {
                                     .font(.callout).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                             }.font(.subheadline).padding(16)
-                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18)) }
+                                .background(PocketPalette.surface, in: .rect(cornerRadius: 18)) }
                         }.padding(.horizontal, 20).padding(.bottom, 20)
                     }.scrollDismissesKeyboard(.interactively)
                 } else {
@@ -142,8 +142,8 @@ struct PromptStudioView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.05)))
+                    .background(PocketPalette.surface, in: .rect(cornerRadius: 20))
+                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(PocketPalette.text.opacity(0.05)))
                     .padding(.horizontal, 16).padding(.bottom, 12)
                 }
                 if blockEditing && layout.showsPromptPreview {
@@ -156,12 +156,12 @@ struct PromptStudioView: View {
                                 Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft }
                                     .labelStyle(.iconOnly).buttonStyle(.borderless)
                             }
-                            Text("\(draft.count) 字符 · 权重与顺序实时更新").font(.caption).foregroundStyle(.secondary)
+                            Text("\(draft.count) 字符 · 权重与顺序实时更新").font(.caption).foregroundStyle(PocketPalette.secondary)
                             Text(draft.isEmpty ? "添加词块后会显示在这里。" : draft)
                                 .textSelection(.enabled).lineSpacing(5).frame(maxWidth: .infinity, alignment: .leading)
                         }.padding(20)
                     }.frame(width: min(380, layout.width * 0.32))
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
+                        .background(PocketPalette.surface)
                 }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -217,7 +217,7 @@ struct PromptStudioView: View {
                 Text(savedVersion ? "已保存新版本" : "\(draft.count) 字符")
                 Spacer()
                 Text("应用后更新工作流")
-            }.font(.caption2).foregroundStyle(.secondary)
+            }.font(.caption2).foregroundStyle(PocketPalette.secondary)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { versionButtons }
                 VStack(spacing: 10) { versionButtons }
@@ -252,7 +252,7 @@ private struct PromptFunctionFilter: View {
             HStack {
                 Label("词块功能", systemImage: "sparkle.magnifyingglass").font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("自动识别").font(.caption2).foregroundStyle(.secondary)
+                Text("自动识别").font(.caption2).foregroundStyle(PocketPalette.secondary)
             }
             Menu {
                 Button { selection = nil } label: {
@@ -268,14 +268,14 @@ private struct PromptFunctionFilter: View {
             } label: {
                 HStack {
                     Text(selection?.title ?? "全部词块")
-                    Text("\(document.words(matching: selection).count)").foregroundStyle(.secondary)
+                    Text("\(document.words(matching: selection).count)").foregroundStyle(PocketPalette.secondary)
                     Spacer()
                     Image(systemName: "line.3.horizontal.decrease")
                 }.font(.subheadline).padding(12)
                     .background(PocketPalette.accent.opacity(0.07), in: .rect(cornerRadius: 12))
             }.buttonStyle(.plain).accessibilityIdentifier("promptFunctionFilter")
             Text("按关键词识别，点词块可手动更正；筛选不会改变提交内容。")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(PocketPalette.secondary)
         }
     }
 }

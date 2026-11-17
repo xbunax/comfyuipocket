@@ -5,6 +5,7 @@ struct AppSettingsView: View {
     @AppStorage("workspaceLayoutMode") private var layoutMode = "automatic"
     var body: some View {
         Form {
+            AppearanceSettings()
             Section {
                 Picker("界面布局", selection: $layoutMode) {
                     Text("自动适应窗口").tag("automatic")
@@ -12,7 +13,7 @@ struct AppSettingsView: View {
                     Text("大屏分栏").tag("expanded")
                 }
                 Label("⌘1 工作台 · ⌘2 任务 · ⌘3 作品 · ⌘4 连接", systemImage: "keyboard")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.footnote).foregroundStyle(PocketPalette.secondary)
             } header: { Text("iPad 与 Mac 镜像") } footer: {
                 Text("按当前窗口宽度适配，支持 iPad 分屏。iPhone 镜像自由调整比例需要 iOS 27、macOS 27 和支持的手机型号；旧系统只会等比例缩放。大屏分栏至少需要 680 点宽度；窗口较窄时保留单栏。")
             }

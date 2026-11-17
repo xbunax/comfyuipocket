@@ -29,7 +29,7 @@ struct OutputBrowserView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         breadcrumbs
                         HStack {
-                            Text("\(total) 项 · 图片与视频").font(.caption).foregroundStyle(.secondary)
+                            Text("\(total) 项 · 图片与视频").font(.caption).foregroundStyle(PocketPalette.secondary)
                             Spacer()
                             layoutMenu
                             MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
@@ -39,13 +39,13 @@ struct OutputBrowserView: View {
                         }
                         if !store.pluginCapabilities.contains("output-sort") {
                             Text("目录排序需要电脑端 Pocket 插件 v0.8.0；当前按时间从新到旧显示。")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(PocketPalette.secondary)
                         }
                         if let message {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label(message, systemImage: "exclamationmark.circle").font(.footnote)
                                 Button("重试") { Task { await load(offset: entries.isEmpty ? 0 : (nextOffset ?? 0)) } }
-                            }.foregroundStyle(.secondary)
+                            }.foregroundStyle(PocketPalette.secondary)
                         }
                         folderSection
                         fileSection
@@ -87,10 +87,10 @@ struct OutputBrowserView: View {
                         Button { folder = entry.path } label: {
                             VStack(alignment: .leading, spacing: 10) {
                                 Image(systemName: "folder.fill").font(.largeTitle).foregroundStyle(PocketPalette.accent)
-                                Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                                Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text).lineLimit(2)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }.padding(16).frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
-                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 16))
+                                .background(PocketPalette.surface, in: .rect(cornerRadius: 16))
                         }.buttonStyle(.plain).hoverEffect(.highlight)
                     }
                 }
@@ -100,14 +100,14 @@ struct OutputBrowserView: View {
                         Button { folder = entry.path } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "folder.fill").font(.title2).foregroundStyle(PocketPalette.accent)
-                                Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                                Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text).lineLimit(2)
                                 Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(PocketPalette.secondary)
                             }.padding(14).contentShape(Rectangle())
                         }.buttonStyle(.plain).hoverEffect(.highlight)
                         if entry.id != folders.last?.id { Divider().padding(.leading, 52) }
                     }
-                }.background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18))
+                }.background(PocketPalette.surface, in: .rect(cornerRadius: 18))
             }
         }
     }
@@ -122,17 +122,17 @@ struct OutputBrowserView: View {
                             HStack(spacing: 12) {
                                 RemoteImage(output: entry.output).frame(width: 68, height: 68).clipped().clipShape(.rect(cornerRadius: 12))
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                                    Text(entry.name).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text).lineLimit(2)
                                     fileMetadata(entry)
                                     Text(Date(timeIntervalSince1970: Double(entry.modified) / 1000), format: .dateTime.month().day().hour().minute())
-                                        .font(.caption2).foregroundStyle(.secondary)
+                                        .font(.caption2).foregroundStyle(PocketPalette.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                             }.padding(12).contentShape(Rectangle())
                         }.buttonStyle(.plain).hoverEffect(.highlight)
                         if entry.id != files.last?.id { Divider().padding(.leading, 92) }
                     }
-                }.background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18))
+                }.background(PocketPalette.surface, in: .rect(cornerRadius: 18))
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: displayLayout == "large" ? 260 : 150), spacing: 12)], spacing: 16) {
                     ForEach(files) { entry in
@@ -140,7 +140,7 @@ struct OutputBrowserView: View {
                             VStack(alignment: .leading, spacing: 7) {
                                 RemoteImage(output: entry.output).frame(height: displayLayout == "large" ? 240 : 150)
                                     .clipped().clipShape(.rect(cornerRadius: 14))
-                                Text(entry.name).font(.caption).foregroundStyle(.primary).lineLimit(2)
+                                Text(entry.name).font(.caption).foregroundStyle(PocketPalette.text).lineLimit(2)
                                 fileMetadata(entry)
                             }
                         }.buttonStyle(.plain).hoverEffect(.highlight)
@@ -154,7 +154,7 @@ struct OutputBrowserView: View {
         HStack(spacing: 5) {
             Image(systemName: entry.output.isVideo ? "video" : "photo")
             Text(ByteCountFormatter.string(fromByteCount: entry.size, countStyle: .file))
-        }.font(.caption2).foregroundStyle(.secondary)
+        }.font(.caption2).foregroundStyle(PocketPalette.secondary)
     }
 
     private func preview(_ output: OutputImage) {

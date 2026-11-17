@@ -5,6 +5,8 @@ struct MobileCanvasScene: Decodable {
     var groups: [MobileCanvasGroup] = []
     var links: [MobileCanvasLink] = []
     var nested = false
+    var graphPath: [String]?
+    var bookmarkNodes: [CanvasNodeLocation] = []
 }
 struct MobileCanvasGroup: Decodable, Identifiable {
     let id: String
@@ -70,7 +72,7 @@ struct MobileCanvas: View {
                 if session.scene.nested {
                     Button("主图", systemImage: "arrow.up.left") { Task { await session.action("subgraph", arguments: ["id": ""]) } }.labelStyle(.iconOnly)
                 }
-            }.font(.subheadline).padding(12).background(.regularMaterial)
+            }.font(.subheadline).padding(12).background(PocketPalette.surface)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     groupButton("", "全部")
@@ -87,7 +89,7 @@ struct MobileCanvas: View {
             GeometryReader { proxy in
                 ZStack(alignment: .bottomTrailing) {
                     Canvas { context, size in draw(&context, size: size) }
-                        .background(Color(uiColor: .systemGroupedBackground))
+                        .background(PocketPalette.background)
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 8).onChanged { event in
                             guard session.loaded || !moving else { return }
@@ -123,16 +125,16 @@ struct MobileCanvas: View {
                         Button { zoom(to: min(3, scale * 1.3), size: proxy.size) } label: { Image(systemName: "plus") }.accessibilityLabel("放大")
                         Button { zoom(to: max(0.08, scale / 1.3), size: proxy.size) } label: { Image(systemName: "minus") }.accessibilityLabel("缩小")
                         Button { reset(size: proxy.size) } label: { Image(systemName: "viewfinder") }.accessibilityLabel("定位起点")
-                    }.font(.title3).buttonStyle(.borderless).padding(16).background(.regularMaterial, in: .capsule).padding(12)
+                    }.font(.title3).buttonStyle(.borderless).padding(16).background(PocketPalette.surface, in: .capsule).padding(12)
                 }.clipped()
                     .onAppear { reset(size: proxy.size) }
                     .onChange(of: group) { _, _ in reset(size: proxy.size) }
                     .onChange(of: compact) { _, _ in moving = false; reset(size: proxy.size) }
             }
             Text(moving ? "拖动节点卡片移动位置；拖动空白平移" : "点击节点编辑 · 拖动空白平移 · 双指缩放")
-                .font(.caption2).foregroundStyle(.secondary).padding(6)
+                .font(.caption2).foregroundStyle(PocketPalette.secondary).padding(6)
         }
-        .background(Color(uiColor: .systemBackground))
+        .background(PocketPalette.background)
         .confirmationDialog("更改当前分组中所有执行节点的状态？", isPresented: Binding(get: { groupMode != nil }, set: { if !$0 { groupMode = nil } }), titleVisibility: .visible) {
             Button("应用到分组") {
                 if let mode = groupMode {
@@ -157,8 +159,8 @@ struct MobileCanvas: View {
                         }
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(node.title).foregroundStyle(.primary)
-                            Text("#\(node.id) · \(node.modeTitle) · \(node.widgets.count) 项可编辑参数").font(.caption).foregroundStyle(.secondary)
+                            Text(node.title).foregroundStyle(PocketPalette.text)
+                            Text("#\(node.id) · \(node.modeTitle) · \(node.widgets.count) 项可编辑参数").font(.caption).foregroundStyle(PocketPalette.secondary)
                         }
                     }
                 }.searchable(text: $query, prompt: "名称、类型或节点编号")
@@ -202,7 +204,7 @@ struct MobileCanvas: View {
         }
         for node in nodes {
             let r = rect(node), shape = Path(roundedRect: r, cornerRadius: 16)
-            context.fill(shape, with: .color(Color(uiColor: .secondarySystemGroupedBackground)))
+            context.fill(shape, with: .color(PocketPalette.surface))
             context.stroke(shape, with: .color(node.mode == 0 ? PocketPalette.accent.opacity(0.6) : Color.secondary.opacity(0.4)), lineWidth: 1.5)
             context.draw(context.resolve(Text(node.title).font(.system(size: 16, weight: .semibold)).foregroundColor(.primary)),
                          in: CGRect(x: r.minX + 14, y: r.minY + 12, width: 242, height: 43))
@@ -228,7 +230,7 @@ struct MobileNodeInspector: View {
             List {
                 if let node {
                     Section {
-                        Text(node.type).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(node.type).font(.caption).foregroundStyle(PocketPalette.secondary).textSelection(.enabled)
                         Menu("执行状态：\(node.modeTitle)") {
                             Button("启用") { pendingMode = 0 }; Button("静音（不执行）") { pendingMode = 2 }; Button("旁路（跳过处理）") { pendingMode = 4 }
                         }
@@ -243,8 +245,8 @@ struct MobileNodeInspector: View {
                         ForEach(node.widgets) { widget in
                             Button { editing = widget } label: {
                                 VStack(alignment: .leading, spacing: 7) {
-                                    Text(widget.name).font(.subheadline).foregroundStyle(.secondary)
-                                    Text(widget.value.text.isEmpty ? "未填写" : widget.value.text).lineLimit(3).foregroundStyle(.primary)
+                                    Text(widget.name).font(.subheadline).foregroundStyle(PocketPalette.secondary)
+                                    Text(widget.value.text.isEmpty ? "未填写" : widget.value.text).lineLimit(3).foregroundStyle(PocketPalette.text)
                                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
                             }.disabled(!session.loaded)
                         }

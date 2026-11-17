@@ -13,9 +13,9 @@ struct CanvasHardwareBar: View {
     private func metric(_ title: String, value: Double?) -> some View {
         VStack(spacing: 5) {
             HStack(spacing: 3) {
-                Text(title).foregroundStyle(.secondary)
+                Text(title).foregroundStyle(PocketPalette.secondary)
                 Spacer(minLength: 0)
-                Text(value.map { "\(Int($0.rounded()))%" } ?? "—").monospacedDigit().foregroundStyle(.primary)
+                Text(value.map { "\(Int($0.rounded()))%" } ?? "—").monospacedDigit().foregroundStyle(PocketPalette.text)
             }.font(.caption2.weight(.medium))
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {

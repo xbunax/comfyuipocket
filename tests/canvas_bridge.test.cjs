@@ -66,6 +66,34 @@ test('execution node IDs resolve through nested subgraph instances', () => {
 });
 
 const { mobileScene, setMobileWidget, moveMobileNode } = require('../ios/Pocket/CanvasBridge.js');
+const { bookmarkLocations, focusBookmark } = require('../ios/Pocket/CanvasBridge.js');
+test('bookmarks focus the real nested node and reject stale targets without changing graphs', () => {
+  const f = fixture();
+  const leaf = {id: 1, type: 'Text', title: 'Nested prompt', pos: [100, 200], size: [300, 200]};
+  const child = {_nodes: [leaf]};
+  f.source.subgraph = child;
+  let selected;
+  Object.assign(f.app.canvas, {
+    ds: {scale: 1, offset: [0, 0]}, canvas: {getBoundingClientRect: () => ({width: 390, height: 600})},
+    selectNode(node) { selected = node; }, setGraph(graph) { this.graph = graph; },
+    openSubgraph(graph) { this.graph = graph; }
+  });
+  const originalPosition = [...leaf.pos];
+  assert.equal(bookmarkLocations(f.app).bookmarkNodes.filter(n => n.nodeID === '1').length, 2);
+  assert.throws(() => focusBookmark(f.app, ['missing'], '1', 'Text'), /子图已移除/);
+  assert.equal(f.app.canvas.graph, f.graph);
+  assert.equal(focusBookmark(f.app, ['1'], '1', 'Text'), true);
+  assert.equal(selected, leaf);
+  assert.equal(f.app.canvas.graph, child);
+  assert.deepEqual(bookmarkLocations(f.app).graphPath, ['1']);
+  assert.deepEqual(leaf.pos, originalPosition);
+  assert.deepEqual(f.transactions(), [0, 0]);
+  assert.throws(() => focusBookmark(f.app, ['1'], '1', 'OtherType'), /类型已改变/);
+  assert.equal(f.app.canvas.graph, child);
+  // A recursive custom graph must not make the navigation index loop forever.
+  leaf.subgraph = f.graph;
+  assert.equal(bookmarkLocations(f.app).bookmarkNodes.length, 3);
+});
 test('mobile scene preserves bypass states, groups and edges while hiding linked/internal widgets', () => {
   const f = fixture();
   Object.assign(f.source, {type:'Source',pos:[10,20],size:[280,300],mode:4});

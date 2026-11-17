@@ -1,16 +1,19 @@
-ComfyUI Pocket v0.13.0
+ComfyUI Pocket v0.14.0
 
-- Add IP / P2P connection tabs. Pair with a computer-generated QR code, QR photo,
-  pasted complete invitation or comfypocket link; retain saved peer identity.
-- Integrate official iroh-ffi 1.2.0 on iOS and Python. Disable relay transport on
-  both endpoints throughout connection/reconnection; report direct-path failure.
-- Add opt-in desktop pairing management, five-minute single-use invitations,
-  persistent authorization, device revocation and P2P shutdown.
-- Carry HTTP, original custom-node canvas, WebSockets, uploads and media Range
-  requests over authenticated QUIC streams. Keep cache/task identity stable when
-  the phone's private loopback port changes.
-- Requires Pocket plugin 0.9.0 plus its optional P2P requirements. Existing IP
-  connections remain available. Preserve Xcode 27.1 and resizable mirror support.
+- Favorite canvas nodes per server and workflow. Tap the star in the bottom bar
+  to save the focused node, search favorites, remove favorites or jump directly
+  to the original node fitted to the canvas. The large-window navigator also
+  has per-node stars and an only-favorites filter.
+- Preserve nested subgraph paths and node type identity. Removed/replaced nodes
+  remain marked unavailable; undo can restore them without losing the bookmark.
+- Add seven persisted colorways: Celadon, Iris, Bay, Amber, Graphite, Gruvbox and
+  Catppuccin Mocha. Light/dark/system appearance; community light companions are
+  Gruvbox Light and Catppuccin Latte. Theme native backgrounds, cards, text,
+  controls and prompt chips; preserve original ComfyUI node functional colors.
+- Unify native surfaces and reduce list section spacing. Include a separate
+  interactive UI proposal covering the workbench, canvas, tasks and gallery;
+  proposed larger layout changes are identified as a design preview.
 
-Device IPA build only; no simulator tests. Real iPhone/cellular direct-path
-availability depends on network/NAT conditions and must be checked on the device.
+Pocket plugin remains 0.9.0; no reinstall required. Device IPA build only, no
+simulator tests. Verify touch targeting, theme appearance and nested-node
+navigation on a physical iPhone/iPad.

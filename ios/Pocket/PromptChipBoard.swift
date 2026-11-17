@@ -124,7 +124,7 @@ struct PromptChipBoard: View {
         let blocks = document.blocks.filter { $0.categoryID == category.id && (functionFilter == nil || $0.function == functionFilter) }
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Circle().fill(Color.mint.opacity(0.8)).frame(width: 8, height: 8)
+                Circle().fill(PocketPalette.accent.opacity(0.8)).frame(width: 8, height: 8)
                 Button {
                     if let index = document.categories.firstIndex(where: { $0.id == category.id }) {
                         withAnimation(.snappy) { document.categories[index].collapsed.toggle() }
@@ -132,9 +132,9 @@ struct PromptChipBoard: View {
                 } label: {
                     HStack(spacing: 8) {
                         Text(category.name).font(.subheadline.weight(.semibold))
-                        Text("\(blocks.count)").font(.caption).foregroundStyle(.secondary)
+                        Text("\(blocks.count)").font(.caption).foregroundStyle(PocketPalette.secondary)
                         Image(systemName: category.collapsed ? "chevron.right" : "chevron.down").font(.caption2)
-                    }.foregroundStyle(.primary)
+                    }.foregroundStyle(PocketPalette.text)
                 }.buttonStyle(.plain)
                 Spacer()
                 Menu {
@@ -158,7 +158,7 @@ struct PromptChipBoard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(highlightedCategory == category.id ? Color.mint.opacity(0.12) : Color.secondary.opacity(0.06),
+        .background(highlightedCategory == category.id ? PocketPalette.accent.opacity(0.12) : Color.secondary.opacity(0.06),
                     in: .rect(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.secondary.opacity(0.12)))
         .background(PromptCategoryDropZone(actions: dropActions(category: category.id, target: nil)))

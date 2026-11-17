@@ -127,14 +127,14 @@ struct ArtworkDetails: View {
                         ForEach(record.promptFields) { field in
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    Text("\(field.nodeTitle) · \(field.key)").font(.caption).foregroundStyle(.secondary)
+                                    Text("\(field.nodeTitle) · \(field.key)").font(.caption).foregroundStyle(PocketPalette.secondary)
                                     Spacer()
                                     Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = field.value.text }.labelStyle(.iconOnly)
                                 }
                                 Text(field.value.text.isEmpty ? "空提示词" : field.value.text).textSelection(.enabled)
                             }.padding(.vertical, 4)
                         }
-                    } else { Text("未找到此作品提交时的提示词记录。").foregroundStyle(.secondary) }
+                    } else { Text("未找到此作品提交时的提示词记录。").foregroundStyle(PocketPalette.secondary) }
                 }
                 if let record, !record.parameterFields.isEmpty {
                     Section {

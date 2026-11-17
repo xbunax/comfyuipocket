@@ -22,7 +22,7 @@ struct WorkflowParameters: View {
                 Text("常用操作").tag(false); Text("全部参数").tag(true)
             }.pickerStyle(.segmented)
             Text(showAll ? "展开节点查看高级设置；内部时间轴数据通过专用编辑器维护。" : "素材、提示词与生成设置优先显示。收藏的参数也会保留在这里。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(PocketPalette.secondary)
             HStack {
                 Button("展开全部", systemImage: "arrow.down.right.and.arrow.up.left") {
                     expandedGroups = WorkflowNodePurpose.allCases.map(\.rawValue).joined(separator: "\n")
@@ -45,10 +45,10 @@ struct WorkflowParameters: View {
                     } label: {
                         HStack {
                             Text(purpose.title).textCase(nil)
-                            Text("\(nodes.count) 个节点").font(.caption).foregroundStyle(.secondary)
+                            Text("\(nodes.count) 个节点").font(.caption).foregroundStyle(PocketPalette.secondary)
                             Spacer()
                             Image(systemName: contains(expandedGroups, purpose.rawValue) ? "chevron.down" : "chevron.right")
-                        }.foregroundStyle(.primary).contentShape(Rectangle())
+                        }.foregroundStyle(PocketPalette.text).contentShape(Rectangle())
                     }.buttonStyle(.plain)
                 }
             }
@@ -65,12 +65,12 @@ struct WorkflowParameters: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(node.title).font(.subheadline.weight(.semibold))
-                        Text("节点 #\(node.id) · \(node.fields.count) 项参数").font(.caption).foregroundStyle(.secondary)
+                        Text("节点 #\(node.id) · \(node.fields.count) 项参数").font(.caption).foregroundStyle(PocketPalette.secondary)
                     }
                     Spacer(minLength: 8)
                     Image(systemName: contains(expandedNodes, node.id) ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                }.foregroundStyle(.primary).padding(.vertical, 6).contentShape(Rectangle())
+                        .font(.caption.weight(.semibold)).foregroundStyle(PocketPalette.secondary)
+                }.foregroundStyle(PocketPalette.text).padding(.vertical, 6).contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityValue(contains(expandedNodes, node.id) ? "已展开" : "已折叠")
             if contains(expandedNodes, node.id) {
@@ -116,7 +116,7 @@ struct WorkflowParameters: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("LoRA \(slot) · \(enabled ? "已启用" : "未启用")").font(.subheadline)
                         if enabled, let model = fields.first(where: { $0.key.hasPrefix("LoRA_") }) {
-                            Text(model.value.text).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(model.value.text).font(.caption).foregroundStyle(PocketPalette.secondary).lineLimit(1)
                         }
                     }
                 }.padding(10).background(Color.secondary.opacity(0.05), in: .rect(cornerRadius: 12))
@@ -126,7 +126,7 @@ struct WorkflowParameters: View {
     private func fieldEditor(_ field: WorkflowField, label: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(label ?? field.key).font(.caption).foregroundStyle(.secondary)
+                Text(label ?? field.key).font(.caption).foregroundStyle(PocketPalette.secondary)
                 Spacer()
                 Button {
                     guard let current = index else { return }
@@ -160,7 +160,7 @@ struct WorkflowParameters: View {
                 dimension(resolution.height, label: "高")
             }
             HStack {
-                Text("常用分辨率").font(.caption).foregroundStyle(.secondary)
+                Text("常用分辨率").font(.caption).foregroundStyle(PocketPalette.secondary)
                 Spacer()
                 Menu {
                     ForEach(ResolutionPreset.common) { preset in
@@ -185,7 +185,7 @@ struct WorkflowParameters: View {
                                 Text(preset.id).font(.caption.monospacedDigit())
                             }
                                 .padding(.horizontal, 12).padding(.vertical, 10)
-                                .foregroundStyle(selected ? PocketPalette.accent : Color.primary)
+                                .foregroundStyle(selected ? PocketPalette.accent : PocketPalette.text)
                                 .background(selected ? PocketPalette.accent.opacity(0.12) : Color.secondary.opacity(0.06), in: .capsule)
                                 .overlay(Capsule().strokeBorder(selected ? PocketPalette.accent.opacity(0.4) : Color.clear))
                         }.buttonStyle(.plain)

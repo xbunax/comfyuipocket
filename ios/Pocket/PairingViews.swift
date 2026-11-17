@@ -15,9 +15,9 @@ struct IrohPairingFields: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label(peer.name, systemImage: "desktopcomputer").font(.headline)
                     Text("设备 \(peer.endpointId.prefix(12))…\(peer.endpointId.suffix(6))")
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .font(.caption.monospaced()).foregroundStyle(PocketPalette.secondary)
                     Text("已保存配对，可直接重连。更换电脑时扫描或粘贴新的配对码。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(PocketPalette.secondary)
                 }.padding(.vertical, 4)
             }
             if !store.connected {
@@ -78,9 +78,9 @@ private struct PairingScanner: View {
                 PairingCamera(onCode: onCode, onError: { message = $0 })
                 if let message {
                     ContentUnavailableView("无法使用相机", systemImage: "camera", description: Text(message + "\n可以改用粘贴配对码或从图片识别。"))
-                        .background(.regularMaterial)
+                        .background(PocketPalette.surface)
                 } else {
-                    VStack { Spacer(); Label("对准电脑上的 Pocket 二维码", systemImage: "qrcode.viewfinder").padding().background(.regularMaterial, in: .capsule).padding(.bottom, 24) }
+                    VStack { Spacer(); Label("对准电脑上的 Pocket 二维码", systemImage: "qrcode.viewfinder").padding().background(PocketPalette.surface, in: .capsule).padding(.bottom, 24) }
                 }
             }.navigationTitle("扫描配对码").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }

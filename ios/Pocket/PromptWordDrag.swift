@@ -135,17 +135,17 @@ final class PromptNativeChipView: UIView {
     func update(block: PromptBlock, highlighted: Bool, dragging: Bool) {
         textButton.setTitle((block.enabled ? "" : "⏸ ") + block.text, for: .normal)
         textButton.titleLabel?.font = UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: traitCollection)
-        textButton.setTitleColor(block.enabled ? .label : .secondaryLabel, for: .normal)
+        textButton.setTitleColor(block.enabled ? UIColor(PocketPalette.text) : UIColor(PocketPalette.secondary), for: .normal)
         textButton.accessibilityLabel = "编辑词块 \(block.text)"
         textButton.accessibilityIdentifier = "promptChip.\(block.text)"
         textButton.accessibilityHint = "轻点打开详细设置，长按拖动排序"
         closeButton.accessibilityLabel = "删除词块 \(block.text)"
         weightLabel.font = UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traitCollection)
         weightLabel.text = block.weight == 1 ? nil : PromptBlock.weightText(block.weight)
-        weightLabel.textColor = .systemTeal
-        backgroundColor = UIColor.secondarySystemFill.withAlphaComponent(block.enabled ? 1 : 0.45)
+        weightLabel.textColor = UIColor(PocketPalette.accent)
+        backgroundColor = UIColor(PocketPalette.surface).withAlphaComponent(block.enabled ? 1 : 0.45)
         layer.borderWidth = highlighted ? 2 : 1
-        layer.borderColor = (highlighted ? UIColor.systemTeal : UIColor.tertiaryLabel).resolvedColor(with: traitCollection).cgColor
+        layer.borderColor = (highlighted ? UIColor(PocketPalette.accent) : UIColor(PocketPalette.border)).resolvedColor(with: traitCollection).cgColor
         alpha = dragging ? 0.45 : 1
         invalidateIntrinsicContentSize(); setNeedsLayout()
     }

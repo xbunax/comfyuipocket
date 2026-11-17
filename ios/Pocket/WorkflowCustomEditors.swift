@@ -24,7 +24,7 @@ struct WorkbenchImageEditor: View {
                 Button("添加参考图", systemImage: "plus") { selection = .string(""); adding = true }
                     .disabled(collection.items.count >= 10)
                 Text("支持相册、本地文件和作品。排序会保留已有遮罩；遮罩绘制请在专用控件中操作。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(PocketPalette.secondary)
             } else { Label("此图片格式请在画布专用控件中编辑", systemImage: "rectangle.and.hand.point.up.left").font(.caption) }
         }.sheet(isPresented: $adding) {
             NavigationStack {
@@ -61,7 +61,7 @@ struct H3StoryboardEditor: View {
                 Label("\(storyboard.segments.count) 个分镜 · \(inputs["workspace_mode"].text)", systemImage: "film.stack").font(.headline)
                 if !storyboard.editable {
                     Text("此时间轴含媒体轨道、裁切或特殊结构。可在画布中选择导演台，打开专用控件编辑，原数据会完整保留。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(PocketPalette.secondary)
                 }
                 ForEach(Array(storyboard.segments.enumerated()), id: \.offset) { index, segment in
                     DisclosureGroup(isExpanded: Binding(get: { expanded.contains(index) }, set: { if $0 { expanded.insert(index) } else { expanded.remove(index) } })) {
@@ -83,7 +83,7 @@ struct H3StoryboardEditor: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("分镜 \(index + 1)").font(.subheadline.bold())
-                            Text(segment["prompt"].text.isEmpty ? "未填写提示词" : segment["prompt"].text).lineLimit(2).font(.caption).foregroundStyle(.secondary)
+                            Text(segment["prompt"].text.isEmpty ? "未填写提示词" : segment["prompt"].text).lineLimit(2).font(.caption).foregroundStyle(PocketPalette.secondary)
                         }
                     }.padding(12).background(Color.secondary.opacity(0.06), in: .rect(cornerRadius: 14))
                 }

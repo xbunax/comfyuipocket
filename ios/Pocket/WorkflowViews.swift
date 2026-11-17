@@ -63,13 +63,13 @@ struct LibraryView: View {
                                     } label: {
                                         HStack(spacing: 8) {
                                             Text(group.title).textCase(nil)
-                                            Text("\(group.items.count)").font(.caption).foregroundStyle(.secondary)
+                                            Text("\(group.items.count)").font(.caption).foregroundStyle(PocketPalette.secondary)
                                             Spacer()
                                             Image(systemName: isCollapsed(group.id) ? "chevron.right" : "chevron.down")
                                                 .font(.caption2)
                                         }
                                         .contentShape(Rectangle())
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(PocketPalette.text)
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -77,7 +77,7 @@ struct LibraryView: View {
                         } else {
                             Section("搜索结果") {
                                 if searchResults.isEmpty {
-                                    Text("没有匹配的工作流。").foregroundStyle(.secondary)
+                                    Text("没有匹配的工作流。").foregroundStyle(PocketPalette.secondary)
                                 } else {
                                     ForEach(searchResults) { workflow in row(for: workflow) }
                                 }
@@ -210,7 +210,7 @@ struct LibraryView: View {
             Button(store.isPinned(workflow.id) ? "取消置顶" : "置顶", systemImage: "pin") { store.togglePinned(workflow.id) }
             Button("复制", systemImage: "doc.on.doc") { store.duplicate(workflow) }
         }
-        .tag(workflow.id)
+        .tag(workflow.id).listRowBackground(PocketPalette.surface)
     }
 }
 
@@ -226,9 +226,9 @@ private struct WorkflowRow: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text(workflow.name).font(.headline).lineLimit(2)
                 Text("\(workflow.prompt.count) 个节点 · \(workflow.fields.count) 项参数")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(PocketPalette.secondary)
                 if let prompt = workflow.fields.first(where: { $0.key == "text" }), !prompt.value.text.isEmpty {
-                    Text(prompt.value.text).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                    Text(prompt.value.text).font(.caption).lineLimit(2).foregroundStyle(PocketPalette.secondary)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 8)
@@ -296,7 +296,7 @@ struct WorkflowEditor: View {
                             }
                         }.font(.caption).buttonStyle(.borderless)
                         Text("\(workflow.prompt.count) 个节点 · \(workflow.fields.count) 项参数")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(PocketPalette.secondary)
                     }
                     if arranging {
                         Section("拖动调整参数顺序") {
@@ -313,13 +313,13 @@ struct WorkflowEditor: View {
                             Section("最新任务生成结果") {
                                 if store.isActivePrompt(for: id), let data = store.preview, let image = UIImage(data: data) {
                                     VStack(alignment: .leading, spacing: 6) {
-                                        Text("实时预览").font(.caption).foregroundStyle(.secondary)
+                                        Text("实时预览").font(.caption).foregroundStyle(PocketPalette.secondary)
                                         Image(uiImage: image).resizable().scaledToFit().clipShape(.rect(cornerRadius: 16))
                                     }.padding(.vertical, 4)
                                 }
                                 if outputs.isEmpty {
                                     Text(store.hasQueuedPrompt(for: id) ? "正在生成，完成后会显示在这里。" : "暂无生成结果。")
-                                        .font(.caption).foregroundStyle(.secondary)
+                                        .font(.caption).foregroundStyle(PocketPalette.secondary)
                                 } else {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 12) {
@@ -405,7 +405,7 @@ private struct BatchSettingsView: View {
             }
             Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
                 .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
-            HStack { Text("1"); Spacer(); Text("20") }.font(.caption).foregroundStyle(.secondary)
+            HStack { Text("1"); Spacer(); Text("20") }.font(.caption).foregroundStyle(PocketPalette.secondary)
             Toggle("后续生成随机种子", isOn: $randomizeSeeds)
                 .font(.subheadline).accessibilityIdentifier("batchRandomizeSeeds")
         }.padding(24)
@@ -537,7 +537,7 @@ struct GraphView: View {
                 let node = workflow.prompt[id]!
                 VStack(alignment: .leading, spacing: 8) {
                     Text("#\(id)  \(node["_meta"]["title"].text.nonEmpty ?? node["class_type"].text)").font(.headline)
-                    Text(node["class_type"].text).font(.caption).foregroundStyle(.secondary)
+                    Text(node["class_type"].text).font(.caption).foregroundStyle(PocketPalette.secondary)
                     ForEach(node["inputs"].object.keys.sorted(), id: \.self) { key in
                         let input = node["inputs"][key]
                         if input.array.count == 2, case .string(let source) = input.array[0] {

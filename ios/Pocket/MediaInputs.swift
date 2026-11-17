@@ -70,7 +70,7 @@ struct MediaFieldEditor: View {
                 Image(uiImage: pendingThumbnail).resizable().scaledToFit().frame(maxHeight: 200)
                     .clipShape(.rect(cornerRadius: 16))
             } else { InputMediaPreview(value: text, kind: kind) }
-            if !text.isEmpty { Text(MediaFile.split(text).filename).font(.caption2).foregroundStyle(.secondary).lineLimit(2) }
+            if !text.isEmpty { Text(MediaFile.split(text).filename).font(.caption2).foregroundStyle(PocketPalette.secondary).lineLimit(2) }
             if uploading { ProgressView("正在上传，完成后更新工作流输入…").font(.caption) }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 14) { selectionButtons }
@@ -181,7 +181,7 @@ struct InputMediaPreview: View {
                         Image(systemName: kind == .video ? "film" : (kind == .image ? "photo" : "doc.richtext")).font(.title2)
                         Text(value.isEmpty ? "尚未选择文件" : (failed ? "预览加载失败，点按重试" : "点按预览文件"))
                             .font(.caption)
-                    }.foregroundStyle(.secondary)
+                    }.foregroundStyle(PocketPalette.secondary)
                 }
             }.frame(height: 180)
         }.buttonStyle(.plain)
@@ -253,7 +253,7 @@ private struct ServerMediaPicker: View {
                 Button { select(name); dismiss() } label: {
                     VStack(alignment: .leading, spacing: 8) {
                         InputMediaPreview(value: name, kind: kind).allowsHitTesting(false)
-                        Text(name).font(.caption).foregroundStyle(.primary).lineLimit(2)
+                        Text(name).font(.caption).foregroundStyle(PocketPalette.text).lineLimit(2)
                     }
                 }.buttonStyle(.plain)
             }

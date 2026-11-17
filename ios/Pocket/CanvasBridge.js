@@ -127,6 +127,42 @@
     return change(app, () => { node.disconnectInput(slot); return true; });
   }
 
+  function bookmarkLocations(app) {
+    const locations = [];
+    let graphPath = null;
+    function visit(graph, path, ancestors) {
+      if (!graph || ancestors.has(graph)) return;
+      if (graph === (app.canvas.graph ?? app.rootGraph) && graphPath === null) graphPath = path;
+      const seen = new Set(ancestors); seen.add(graph);
+      for (const node of graph._nodes ?? []) {
+        locations.push({ path, nodeID: String(node.id), type: node.type || "", title: node.title || node.type || String(node.id) });
+        if (node.subgraph) visit(node.subgraph, [...path, String(node.id)], seen);
+      }
+    }
+    visit(app.rootGraph, [], new Set());
+    return { graphPath, bookmarkNodes: locations };
+  }
+
+  function focusBookmark(app, path, id, type) {
+    if (!Array.isArray(path) || !path.every(part => typeof part === "string")) throw new Error("收藏位置无效。");
+    let graph = app.rootGraph;
+    const graphs = [];
+    for (const part of path) {
+      graph = nodeAt(graph, part)?.subgraph;
+      if (!graph) throw new Error("收藏的子图已移除，可在收藏列表中取消收藏。");
+      graphs.push(graph);
+    }
+    const node = nodeAt(graph, id);
+    if (!node || node.type !== type) throw new Error("收藏的节点已移除或类型已改变。");
+    // Resolve the complete target before moving the camera; missing bookmarks
+    // must not navigate to an unrelated node with the same local ID.
+    if (app.canvas.graph !== graph) {
+      app.canvas.setGraph(app.rootGraph);
+      for (const child of graphs) app.canvas.openSubgraph(child);
+    }
+    return focusNode(app, id);
+  }
+
   function mobileScene(app) {
     const graph = app.canvas.graph ?? app.rootGraph;
     const groups = (graph._groups ?? []).map((g, index) => ({
@@ -161,7 +197,7 @@
         if (link) links.push({ id: String(input.link), from: String(link.origin_id), to: String(link.target_id), type: String(link.type ?? input.type) });
       }
     }
-    return { nodes, groups, links, nested: graph !== app.rootGraph };
+    return { nodes, groups, links, nested: graph !== app.rootGraph, ...bookmarkLocations(app) };
   }
 
   async function setMobileWidget(app, id, index, value, name) {
@@ -228,7 +264,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, restoreExecutionModes, textInputCamera };
+    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera };
     return;
   }
 
@@ -550,6 +586,10 @@
     focus(id) {
       if (textEditor?.busy) return true;
       return focusNode(app, id);
+    },
+    focusBookmark(path, id, type) {
+      if (textEditor?.busy) return false;
+      return focusBookmark(app, path, id, type);
     },
     viewport() { return textEditor?.resized() ?? false; },
     finishText() { return textEditor?.finish() ?? true; },
