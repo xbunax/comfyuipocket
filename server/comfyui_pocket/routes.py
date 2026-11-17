@@ -63,7 +63,7 @@ def register_routes():
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort"]})
 
     @routes.get("/pocket/v1/outputs")
     async def outputs(request):
@@ -74,7 +74,8 @@ def register_routes():
             result = await asyncio.to_thread(list_output, folder_paths.get_output_directory(),
                                             request.query.get("folder", ""),
                                             int(request.query.get("offset", "0")),
-                                            int(request.query.get("limit", "60")))
+                                            int(request.query.get("limit", "60")),
+                                            request.query.get("sort", "time"), request.query.get("direction", "descending"))
         except ValueError as exc:
             raise web.HTTPBadRequest(text=str(exc)) from exc
         except FileNotFoundError as exc:

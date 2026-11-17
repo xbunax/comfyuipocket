@@ -2,8 +2,16 @@ import SwiftUI
 import Photos
 import AVKit
 
+private enum TaskNavigationTarget: Hashable {
+    case batch(String)
+    case prompt(String)
+}
+
 struct QueueView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.workspaceLayout) private var layout
+    @State private var selectedTask: TaskNavigationTarget?
+    @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var confirming = false
     @State private var removing: TaskRemovalTarget?
     private var knownIDs: Set<String> { Set(store.currentGenerationTasks.flatMap { $0.items.map(\.id) }) }
@@ -19,8 +27,8 @@ struct QueueView: View {
         }
     }
     var body: some View {
-        NavigationStack {
-            List {
+        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
+            List(selection: $selectedTask) {
                 Section {
                     VStack(alignment: .leading, spacing: 14) {
                         ConnectionBadge()
@@ -46,9 +54,9 @@ struct QueueView: View {
                     ForEach(activeTasks) { task in taskRow(task) }
                     ForEach(Array(otherQueue.enumerated()), id: \.offset) { _, item in
                         let id = item.array[1].text
-                        NavigationLink { TaskDetailView(promptID: id) } label: {
+                        NavigationLink(value: TaskNavigationTarget.prompt(id)) {
                             Label(String(id.prefix(8)), systemImage: store.isRunning(id) ? "play.circle" : "clock")
-                        }.swipeActions {
+                        }.tag(TaskNavigationTarget.prompt(id)).swipeActions {
                             if store.isPending(id) { Button("取消", role: .destructive) { Task { await store.deletePending(id) } } }
                             if !store.isRunning(id) { Button("删除", role: .destructive) { removing = .prompt(id) } }
                         }
@@ -57,18 +65,34 @@ struct QueueView: View {
                 Section("最近任务") {
                     ForEach(recentTasks) { task in taskRow(task) }
                     ForEach(store.sortedHistoryIDs.filter { !knownIDs.contains($0) }, id: \.self) { id in
-                        NavigationLink { TaskDetailView(promptID: id) } label: {
+                        NavigationLink(value: TaskNavigationTarget.prompt(id)) {
                             Label(String(id.prefix(8)), systemImage: store.history[id]["status"]["status_str"].text == "error" ? "exclamationmark.circle" : "checkmark.circle")
                         }
+                        .tag(TaskNavigationTarget.prompt(id))
                         .swipeActions { Button("删除", role: .destructive) { removing = .prompt(id) } }
                     }
                 }
-            }.pocketListSurface().navigationTitle("任务").refreshable { await store.refresh() }
+            }.pocketListSurface().navigationTitle("任务").navigationBarTitleDisplayMode(.inline).refreshable { await store.refresh() }
+                .navigationSplitViewColumnWidth(min: 260, ideal: layout.navigationWidth, max: 360)
                 .taskDeletionDialog($removing)
                 .confirmationDialog("停止服务器当前运行的生成？", isPresented: $confirming, titleVisibility: .visible) {
                     Button("停止当前生成", role: .destructive) { Task { await store.interrupt() } }
                 } message: { Text("此操作会影响服务器当前执行的生成。批次中等待执行的项目可在任务详情中统一取消。") }
+        } detail: {
+            NavigationStack {
+                switch selectedTask {
+                case .batch(let id): GenerationTaskDetailView(taskID: id).id(id)
+                case .prompt(let id): TaskDetailView(promptID: id).id(id)
+                case nil:
+                    ContentUnavailableView("选择任务查看详情", systemImage: "waveform.path",
+                        description: Text("查看实时状态、生成产物和实际使用的参数及提示词。"))
+                }
+            }
+            .edgeSwipeBack(enabled: selectedTask != nil) { selectedTask = nil; preferredColumn = .sidebar }
         }
+        .navigationSplitViewStyle(.balanced)
+        .environment(\.horizontalSizeClass, layout.usesColumns ? .regular : .compact)
+        .onChange(of: selectedTask) { _, next in if next != nil { preferredColumn = .detail } }
     }
     @ViewBuilder private var taskMetrics: some View {
         PocketMetric(title: "进行中", value: activeTasks.count + otherQueue.count, icon: "clock")
@@ -76,7 +100,7 @@ struct QueueView: View {
     }
     private func taskRow(_ task: GenerationTask) -> some View {
         let summary = task.summary(queue: store.queue, history: store.history)
-        return NavigationLink { GenerationTaskDetailView(taskID: task.id) } label: {
+        return NavigationLink(value: TaskNavigationTarget.batch(task.id)) {
             VStack(alignment: .leading, spacing: 10) {
                 Label(task.title, systemImage: task.requestedCount > 1 ? "square.stack.3d.up" : "play.rectangle")
                     .font(.headline).lineLimit(2)
@@ -93,7 +117,7 @@ struct QueueView: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }.padding(.vertical, 8)
-        }.swipeActions {
+        }.tag(TaskNavigationTarget.batch(task.id)).swipeActions {
             Button("删除", role: .destructive) { removing = .task(task) }
                 .disabled(task.submitting || summary.running > 0 || store.deletingTasks.contains(task.id))
             if summary.pending > 0 && !task.submitting {
@@ -332,21 +356,39 @@ struct TaskDetailView: View {
 
 struct GalleryView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.workspaceLayout) private var layout
     @State private var section = "tasks"
     @State private var selected: OutputImage?
+    @State private var sheetOutput: OutputImage?
+    @State private var selectedRecord: MediaProvenance?
+    @State private var selectionAllowsDeletion = true
     @State private var removing: OutputImage?
     @State private var expanded: Set<String> = []
+    @AppStorage("mediaSortKey") private var sortKey = "time"
+    @AppStorage("mediaSortAscending") private var ascending = false
+    @State private var sizes: [String: Int64] = [:]
+    @State private var readingSizes = false
+    @State private var sizeRefresh = UUID()
+    private var order: MediaSortKey { MediaSortKey(rawValue: sortKey) ?? .time }
     private var groups: [MediaTaskGroup] {
         var archive = store.currentMediaArchive
         archive.rememberTasks(store.currentGenerationTasks)
-        return archive.galleryGroups
+        return MediaOrdering.groups(archive.galleryGroups, key: order, ascending: ascending, sizes: sizes)
     }
     var body: some View {
+        HStack(spacing: 0) {
         NavigationStack {
+            VStack(spacing: 0) {
+                Picker("作品来源", selection: $section) {
+                    Text("任务作品").tag("tasks")
+                    Text("历史 Output").tag("output")
+                }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(.bar)
+                Divider()
             ZStack {
                 PocketBackground()
                 if section == "output" {
-                    OutputBrowserView()
+                    OutputBrowserView(onPreview: { output, record in preview(output, record: record, allowDeletion: false) })
                         .id(store.client?.baseURL.absoluteString ?? "")
                 } else if groups.isEmpty {
                     ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
@@ -357,32 +399,66 @@ struct GalleryView: View {
                             Spacer()
                             Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
                         }.padding(.horizontal, 20).padding(.top, 8)
+                        if order == .size {
+                            Text(readingSizes ? "正在读取文件大小…" : "按任务产物合计大小排序；无法读取大小的任务放在末尾。")
+                                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20)
+                        }
                         LazyVStack(spacing: 14) {
                             ForEach(groups) { group in
                                 GalleryTaskCard(group: group, expanded: Binding(get: { expanded.contains(group.id) }, set: {
                                     if $0 { expanded.insert(group.id) } else { expanded.remove(group.id) }
-                                }), selected: $selected, removing: $removing)
+                                }), selected: Binding(get: { selected }, set: { if let output = $0 { preview(output) } }), removing: $removing,
+                                    sortKey: order, ascending: ascending, sizes: sizes)
                             }
                         }.padding(16)
-                    }.refreshable { await store.refresh() }
+                    }.contentMargins(.bottom, 28, for: .scrollContent)
+                        .refreshable { await store.refresh(); sizeRefresh = UUID() }
                 }
-            }.navigationTitle("作品")
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    Picker("作品来源", selection: $section) {
-                        Text("任务作品").tag("tasks")
-                        Text("历史 Output").tag("output")
-                    }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(.bar)
-                }
+            }
+            }.navigationTitle("作品").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if section == "tasks" {
-                        Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh() } }.disabled(!store.connected)
+                        MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
+                        Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(); sizeRefresh = UUID() } }.disabled(!store.connected)
                     }
                 }
-                .sheet(item: $selected) { ImageDetail(output: $0) }
+                .sheet(item: $sheetOutput) { ImageDetail(output: $0, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord) }
                 .workDeletionDialog($removing)
-                .onChange(of: store.client?.baseURL) { _, _ in expanded.removeAll() }
+                .onChange(of: store.client?.baseURL) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; selectedRecord = nil; sizes = [:] }
+                .onChange(of: store.images.map(\.id)) { _, ids in
+                    if selectionAllowsDeletion, let selected, !ids.contains(selected.id) { self.selected = nil; sheetOutput = nil }
+                }
         }
+        .frame(maxWidth: layout.usesColumns ? min(520, max(300, layout.width * 0.42)) : .infinity)
+        if layout.usesColumns {
+            Divider()
+            if let selected {
+                ImageDetail(output: selected, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord,
+                            onClose: { self.selected = nil })
+                    .id("\(store.client?.baseURL.absoluteString ?? "")|\(selected.id)")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView("选择图片或视频", systemImage: "photo.on.rectangle.angled",
+                    description: Text("在左侧浏览任务作品与历史 Output，在这里缩放图片、播放视频和查看生成信息。"))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        }
+        .onChange(of: layout.usesColumns) { _, wide in
+            if wide { sheetOutput = nil }
+            else if let selected { sheetOutput = selected }
+        }
+        .task(id: "\(store.client?.baseURL.absoluteString ?? "")|\(section)|\(sortKey)|\(sizeRefresh)|\(store.images.map(\.id).joined(separator: "|"))") {
+            guard section == "tasks", order == .size, let api = store.client else { readingSizes = false; return }
+            readingSizes = true
+            let result = await api.mediaSizes(store.images)
+            guard !Task.isCancelled, store.client === api else { return }
+            sizes = result; readingSizes = false
+        }
+    }
+    private func preview(_ output: OutputImage, record: MediaProvenance? = nil, allowDeletion: Bool = true) {
+        selectedRecord = record; selectionAllowsDeletion = allowDeletion; selected = output
+        if !layout.usesColumns { sheetOutput = output }
     }
 }
 
@@ -392,18 +468,25 @@ private struct GalleryTaskCard: View {
     @Binding var expanded: Bool
     @Binding var selected: OutputImage?
     @Binding var removing: OutputImage?
+    var sortKey: MediaSortKey = .time
+    var ascending = false
+    var sizes: [String: Int64] = [:]
+    private var orderedOutputs: [OutputImage] { MediaOrdering.outputs(group.outputs, key: sortKey, ascending: ascending, sizes: sizes) }
     var body: some View {
         VStack(spacing: 0) {
             Button {
                 withAnimation(.snappy) { expanded.toggle() }
             } label: {
                 HStack(spacing: 12) {
-                    if let cover = group.outputs.first {
+                    if let cover = orderedOutputs.first {
                         RemoteImage(output: cover).frame(width: 64, height: 72).clipped().clipShape(.rect(cornerRadius: 12))
                     }
                     VStack(alignment: .leading, spacing: 5) {
                         Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(.primary)
                         Text(group.summary).font(.caption).foregroundStyle(.secondary)
+                        if let bytes = MediaOrdering.totalSize(group.outputs, sizes: sizes) {
+                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.caption2).foregroundStyle(.secondary)
+                        }
                         Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                         if group.createdAt > 1_000_000_000 {
                             Text(Date(timeIntervalSince1970: group.createdAt), format: .dateTime.month().day().hour().minute())
@@ -417,7 +500,7 @@ private struct GalleryTaskCard: View {
             if expanded {
                 Divider().padding(.horizontal, 14)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
-                    ForEach(group.outputs) { image in
+                    ForEach(orderedOutputs) { image in
                         VStack(alignment: .leading, spacing: 8) {
                             Button { selected = image } label: {
                                 RemoteImage(output: image).frame(height: 150).clipped().clipShape(.rect(cornerRadius: 12))
@@ -471,6 +554,7 @@ struct ImageDetail: View {
     let output: OutputImage
     var allowDeletion = true
     var knownRecord: MediaProvenance? = nil
+    var onClose: (() -> Void)? = nil
     @State private var image: UIImage?
     @State private var shareURL: URL?
     @State private var status = ""
@@ -513,6 +597,7 @@ struct ImageDetail: View {
                 }.padding()
                 if !status.isEmpty { Text(status).font(.caption).padding() }
             }.navigationTitle("作品预览").navigationBarTitleDisplayMode(.inline)
+                .edgeSwipeBack { close() }
                 .toolbar {
                     if allowDeletion {
                         ToolbarItem(placement: .topBarLeading) {
@@ -520,10 +605,10 @@ struct ImageDetail: View {
                                 .disabled(store.deletingOutputs.contains(output.id))
                         }
                     }
-                    ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("完成") { close() } }
                 }
                 .sheet(isPresented: $showDetails) { ArtworkDetails(output: output, file: fileInfo, record: record) }
-                .workDeletionDialog($removing, onDeleted: { dismiss() })
+                .workDeletionDialog($removing, onDeleted: { close() })
                 .task {
                     do {
                         guard let api = store.client else { return }
@@ -549,5 +634,7 @@ struct ImageDetail: View {
                 }
                 .onDisappear { player?.pause(); if let shareURL { try? FileManager.default.removeItem(at: shareURL) } }
         }
+        .workspaceLayoutReader()
     }
+    private func close() { if let onClose { onClose() } else { dismiss() } }
 }

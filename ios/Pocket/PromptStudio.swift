@@ -53,6 +53,7 @@ struct PromptInputEditor: View {
 
 struct PromptStudioView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.workspaceLayout) private var layout
     @Environment(\.dismiss) private var dismiss
     @Binding var text: String
     let storageKey: String
@@ -103,6 +104,7 @@ struct PromptStudioView: View {
                     Toggle("词块编辑", isOn: mode)
                         .font(.subheadline.weight(.medium)).accessibilityIdentifier("promptBlockEditing")
                 }.padding(.horizontal, 20).padding(.vertical, 14)
+                HStack(alignment: .top, spacing: 0) {
                 if blockEditing {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
@@ -116,12 +118,12 @@ struct PromptStudioView: View {
                             } else {
                                 PromptChipBoard(document: editableBoard, functionFilter: functionFilter)
                             }
-                            DisclosureGroup("最终提示词") {
+                            if !layout.showsPromptPreview { DisclosureGroup("最终提示词") {
                                 Text(draft.isEmpty ? "尚未添加提示词" : draft)
                                     .font(.callout).textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                             }.font(.subheadline).padding(16)
-                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18))
+                                .background(Color(uiColor: .secondarySystemGroupedBackground), in: .rect(cornerRadius: 18)) }
                         }.padding(.horizontal, 20).padding(.bottom, 20)
                     }.scrollDismissesKeyboard(.interactively)
                 } else {
@@ -144,6 +146,24 @@ struct PromptStudioView: View {
                     .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color.primary.opacity(0.05)))
                     .padding(.horizontal, 16).padding(.bottom, 12)
                 }
+                if blockEditing && layout.showsPromptPreview {
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Label("最终提示词", systemImage: "text.alignleft").font(.headline)
+                                Spacer()
+                                Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = draft }
+                                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                            }
+                            Text("\(draft.count) 字符 · 权重与顺序实时更新").font(.caption).foregroundStyle(.secondary)
+                            Text(draft.isEmpty ? "添加词块后会显示在这里。" : draft)
+                                .textSelection(.enabled).lineSpacing(5).frame(maxWidth: .infinity, alignment: .leading)
+                        }.padding(20)
+                    }.frame(width: min(380, layout.width * 0.32))
+                        .background(Color(uiColor: .secondarySystemGroupedBackground))
+                }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(PocketBackground())
             .safeAreaInset(edge: .bottom, spacing: 0) { versionBar }
@@ -158,6 +178,7 @@ struct PromptStudioView: View {
                         if text != original && changed { conflict = true }
                         else { apply() }
                     }.fontWeight(.semibold)
+                        .keyboardShortcut(.return, modifiers: .command)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -165,6 +186,7 @@ struct PromptStudioView: View {
                 }
             }
             .interactiveDismissDisabled(changed)
+            .edgeSwipeBack(preferSystem: false) { if changed { discard = true } else { dismiss() } }
             .confirmationDialog("放弃这次编辑？", isPresented: $discard, titleVisibility: .visible) {
                 Button("放弃修改", role: .destructive) { dismiss() }
                 Button("继续编辑", role: .cancel) { }
@@ -187,6 +209,7 @@ struct PromptStudioView: View {
             }
             .onChange(of: draft) { _, _ in savedVersion = false }
         }
+        .workspaceLayoutReader()
     }
     private var versionBar: some View {
         VStack(spacing: 10) {

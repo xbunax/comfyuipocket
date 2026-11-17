@@ -4,19 +4,26 @@ import UniformTypeIdentifiers
 
 struct WorkflowCanvasHost: View {
     @Environment(PocketStore.self) private var store
+    var onFinish: (() -> Void)? = nil
+    var onShowParameters: ((String) -> Void)? = nil
     @State private var selectedID: String
-    init(workflowID: String) { _selectedID = State(initialValue: workflowID) }
+    init(workflowID: String, onFinish: (() -> Void)? = nil, onShowParameters: ((String) -> Void)? = nil) {
+        _selectedID = State(initialValue: workflowID); self.onFinish = onFinish; self.onShowParameters = onShowParameters
+    }
     var body: some View {
         Group {
             if let api = store.client {
                 WorkflowCanvasView(workflowID: selectedID,
                     session: store.canvasSessions.session(baseURL: api.baseURL, workflowID: selectedID),
-                    selectWorkflow: { selectedID = $0 })
+                    selectWorkflow: { selectedID = $0 }, onFinish: onFinish,
+                    onShowParameters: onShowParameters.map { action in { action(selectedID) } })
                     .id(CanvasCacheKey(baseURL: api.baseURL, workflowID: selectedID))
             } else {
-                WorkflowCanvasView(workflowID: selectedID, session: CanvasSession(), selectWorkflow: { selectedID = $0 })
+                WorkflowCanvasView(workflowID: selectedID, session: CanvasSession(), selectWorkflow: { selectedID = $0 },
+                    onFinish: onFinish, onShowParameters: onShowParameters.map { action in { action(selectedID) } })
             }
         }
+        .workspaceLayoutReader()
     }
 }
 
@@ -24,10 +31,14 @@ struct WorkflowCanvasView: View {
     let workflowID: String
     @Environment(PocketStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.workspaceLayout) private var layout
     let session: CanvasSession
     let selectWorkflow: (String) -> Void
+    var onFinish: (() -> Void)? = nil
+    var onShowParameters: (() -> Void)? = nil
     @State private var canvasSize = CGSize.zero
     @State private var wheelExpanded = false
+    @State private var inspectorVisible = true
     @State private var showWorkflows = false
     @State private var showHardware = false
     @State private var hardware = ServerHardware()
@@ -46,6 +57,7 @@ struct WorkflowCanvasView: View {
         NavigationStack {
             Group {
                 if store.connected, let api = store.client, let workflow {
+                    HStack(spacing: 0) {
                     ZStack {
                         CanvasWebView(session: session)
                             .allowsHitTesting(session.loaded)
@@ -58,6 +70,12 @@ struct WorkflowCanvasView: View {
                         if session.loading {
                             ProgressView(session.loadingMessage).padding(20).background(.regularMaterial, in: .rect(cornerRadius: 18))
                         }
+                    }
+                    if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
+                        Divider()
+                        CanvasNodeNavigator(session: session)
+                            .frame(width: 280).background(.regularMaterial)
+                    }
                     }
                     .task(id: api.baseURL) {
                         store.canvasEditingID = workflowID
@@ -80,10 +98,20 @@ struct WorkflowCanvasView: View {
                 }
             }
             .navigationTitle(workflow?.name ?? "工作流画布").navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
+                        if let onShowParameters {
+                            Button("参数面板", systemImage: "slider.horizontal.3") {
+                                Task {
+                                    if session.loaded { guard await saveForAction() else { return } }
+                                    onShowParameters()
+                                }
+                            }
+                        }
                         Button("切换工作流", systemImage: "square.stack") { showWorkflows = true }
+                        Group {
                         Button(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板", systemImage: "sidebar.left") {
                             Task { await session.setPanels(!session.showPanels) }
                         }
@@ -101,7 +129,8 @@ struct WorkflowCanvasView: View {
                                 catch { session.error = error.localizedDescription }
                             }
                         }
-                    } label: { Image(systemName: "ellipsis.circle") }.disabled(!session.available || submitting)
+                        }.disabled(!session.available)
+                    } label: { Image(systemName: "ellipsis.circle") }.disabled(submitting)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { Task { await run() } } label: {
@@ -109,12 +138,13 @@ struct WorkflowCanvasView: View {
                         else { Image(systemName: "play.fill").frame(minWidth: 26) }
                     }.buttonStyle(.glassProminent).disabled(!session.loaded || submitting || store.busy)
                         .accessibilityLabel("运行当前画布").accessibilityIdentifier("canvas.run")
+                        .keyboardShortcut(.return, modifiers: .command)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
                         Task {
-                            if !session.loaded { dismiss(); return }
-                            if await saveForAction() { dismiss() }
+                            if !session.loaded { finish(); return }
+                            if await saveForAction() { finish() }
                         }
                     }.disabled(working || submitting)
                 }
@@ -175,6 +205,12 @@ struct WorkflowCanvasView: View {
                 if case .failure(let error) = result { session.error = error.localizedDescription }
             }
             .interactiveDismissDisabled()
+            .edgeSwipeBack(enabled: !working && !submitting, preferSystem: false) {
+                Task {
+                    if session.loaded { guard await saveForAction() else { return } }
+                    finish()
+                }
+            }
             .onChange(of: store.error) { _, message in
                 if let message, store.canvasEditingSession === session { session.error = message; store.error = nil }
             }
@@ -185,6 +221,7 @@ struct WorkflowCanvasView: View {
             }
         }
     }
+    private func finish() { if let onFinish { onFinish() } else { dismiss() } }
     private var header: some View {
         VStack(spacing: 7) {
             HStack(spacing: 6) {
@@ -208,20 +245,23 @@ struct WorkflowCanvasView: View {
                     }.buttonStyle(.glass)
                 }.padding(.horizontal, 14).padding(.vertical, 6)
             } else {
-                if wheelExpanded, session.available { CanvasNodeWheel(session: session, compact: true) }
+                if wheelExpanded, session.available, !layout.showsCanvasInspector { CanvasNodeWheel(session: session, compact: true) }
                 HStack(spacing: 10) {
                     Button {
                         session.nodeFocusActive = false
                         Task { await session.action("fit") }
                     } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 36, height: 36) }
                         .accessibilityLabel("工作流总览").disabled(!session.available)
-                    Button { wheelExpanded.toggle() } label: {
+                    Button {
+                        if layout.showsCanvasInspector { inspectorVisible.toggle() }
+                        else { wheelExpanded.toggle() }
+                    } label: {
                         VStack(spacing: 2) {
                             HStack(spacing: 5) {
                                 Text(session.scene.nodes.first { $0.id == session.focusedNodeID }?.title ?? "选择节点").lineLimit(1)
                                 Image(systemName: wheelExpanded ? "chevron.down" : "chevron.up").font(.caption2)
                             }.font(.subheadline.weight(.medium))
-                            Text("\(session.scene.nodes.count) 个节点 · \(wheelExpanded ? "上下滚动定位" : "点按展开轮盘")")
+                            Text("\(session.scene.nodes.count) 个节点 · \(layout.showsCanvasInspector ? "节点侧栏" : (wheelExpanded ? "上下滚动定位" : "点按展开轮盘"))")
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }.frame(maxWidth: .infinity, minHeight: 36)
                     }.disabled(!session.available).accessibilityLabel("展开或收起节点轮盘")

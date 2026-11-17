@@ -114,6 +114,26 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/pocket/v1/outputs", params={"folder": "missing"})).status, 404)
         self.assertEqual((await self.client.get("/pocket/v1/outputs", headers={"comfy-user": "unknown"})).status, 403)
 
+    async def test_output_sort_is_global_before_paging_and_reversible(self):
+        (self.media_root / "folder").mkdir()
+        for name, size, modified in [("b.png", 2, 10), ("a.png", 5, 30), ("c.mp4", 1, 20)]:
+            (self.media_root / name).write_bytes(b"x" * size)
+            os.utime(self.media_root / name, (modified, modified))
+        for sort, expected in [("name", ["a.png", "b.png", "c.mp4"]),
+                               ("size", ["c.mp4", "b.png", "a.png"]),
+                               ("time", ["b.png", "c.mp4", "a.png"])]:
+            for direction in ("ascending", "descending"):
+                names = []
+                for offset in range(4):
+                    response = await self.client.get("/pocket/v1/outputs", params={
+                        "sort": sort, "direction": direction, "offset": str(offset), "limit": "1"})
+                    self.assertEqual(response.status, 200)
+                    names.extend(item["name"] for item in (await response.json())["entries"])
+                self.assertEqual(names, ["folder"] + (expected if direction == "ascending" else list(reversed(expected))))
+        for query in ({"sort": "invalid"}, {"direction": "invalid"}):
+            self.assertEqual((await self.client.get("/pocket/v1/outputs", params=query)).status, 400)
+        self.assertIn("output-sort", (await (await self.client.get("/pocket/v1/info")).json())["capabilities"])
+
     async def test_output_browser_does_not_follow_links(self):
         outside = pathlib.Path(self.temp.name) / "outside"
         outside.mkdir(); (outside / "private.png").write_bytes(b"private")

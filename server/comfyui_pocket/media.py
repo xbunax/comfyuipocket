@@ -10,13 +10,15 @@ def linked(path):
     return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
 
 
-def list_output(directory, folder="", offset=0, limit=60):
+def list_output(directory, folder="", offset=0, limit=60, sort="time", direction="descending"):
     """List one output directory, without following links or scanning descendants."""
     if (not isinstance(folder, str) or any(c in folder for c in "\\:\x00\r\n")
             or folder.startswith("/") or any(p in (".", "..") for p in folder.split("/"))):
         raise ValueError("Invalid output folder")
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("Invalid page")
+    if sort not in ("time", "name", "size") or direction not in ("ascending", "descending"):
+        raise ValueError("Invalid sort order")
     root = Path(directory).resolve()
     relative = PurePosixPath(folder)
     current = root
@@ -48,8 +50,13 @@ def list_output(directory, folder="", offset=0, limit=60):
                                 "modified": stat.st_mtime_ns // 1_000_000})
             except OSError:
                 continue  # A concurrently removed or inaccessible file must not break the page.
-    entries.sort(key=lambda item: (0, item["name"].casefold(), item["name"]) if item["kind"] == "folder"
-                 else (1, -item["modified"], item["name"].casefold(), item["name"]))
+    # Apply a stable directory-wide sort BEFORE slicing pages. Folders stay first.
+    def key(item):
+        value = {"time": item["modified"], "name": item["name"].casefold(), "size": item["size"]}[sort]
+        return value, item["name"].casefold(), item["name"]
+    folders = sorted((item for item in entries if item["kind"] == "folder"), key=key, reverse=direction == "descending")
+    files = sorted((item for item in entries if item["kind"] == "file"), key=key, reverse=direction == "descending")
+    entries = folders + files
     return {"folder": folder, "entries": entries[offset:offset + limit], "total": len(entries),
             "nextOffset": offset + limit if offset + limit < len(entries) else None}
 

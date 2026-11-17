@@ -6,6 +6,8 @@ final class ComfyClient {
     let clientID = UUID().uuidString
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
+    private var sizeCache: [String: (bytes: Int64?, expires: Date)] = [:]
+    private var pendingSizes: [String: Task<Int64?, Never>] = [:]
     init(baseURL: URL) {
         self.baseURL = baseURL
         let config = URLSessionConfiguration.ephemeral
@@ -52,6 +54,40 @@ final class ComfyClient {
     }
     func image(_ image: OutputImage) async throws -> Data {
         try await mediaData(mediaURL(image), revision: image.promptID)
+    }
+    /// HEAD reads file length without downloading images or large videos.
+    private func mediaSize(_ output: OutputImage) async -> Int64? {
+        let key = output.assetID + "|" + output.promptID
+        if let cached = sizeCache[key], cached.expires > Date() { return cached.bytes }
+        if let pending = pendingSizes[key] { return await pending.value }
+        var request = URLRequest(url: mediaURL(output)); request.httpMethod = "HEAD"
+        request.timeoutInterval = 5; request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let session = session
+        let task = Task<Int64?, Never> {
+            guard let (_, response) = try? await session.data(for: request),
+                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let text = http.value(forHTTPHeaderField: "Content-Length"), let size = Int64(text), size >= 0 else { return nil }
+            return size
+        }
+        pendingSizes[key] = task
+        let result = await task.value; pendingSizes[key] = nil
+        if sizeCache.count >= 2048 { sizeCache = sizeCache.filter { $0.value.expires > Date() }; if sizeCache.count >= 2048 { sizeCache.removeAll() } }
+        sizeCache[key] = (result, Date().addingTimeInterval(result == nil ? 30 : 300))
+        return result
+    }
+    func mediaSizes(_ outputs: [OutputImage]) async -> [String: Int64] {
+        var seen = Set<String>(), result: [String: Int64] = [:]
+        let unique = outputs.filter { seen.insert($0.assetID).inserted }
+        for start in stride(from: 0, to: unique.count, by: 4) {
+            guard !Task.isCancelled else { return result }
+            let batch = unique[start..<min(start + 4, unique.count)]
+            await withTaskGroup(of: (String, Int64?).self) { group in
+                for output in batch { group.addTask { (output.assetID, await self.mediaSize(output)) } }
+                for await (id, size) in group { if let size { result[id] = size } }
+            }
+        }
+        return result
     }
     func mediaURL(_ image: OutputImage) -> URL {
         url("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])

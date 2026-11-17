@@ -31,6 +31,19 @@
 - ComfyUI Pocket 插件：在浏览器中使用 ComfyUI 自己的 `graphToPrompt()` 自动转换（含子图），不上传到外部服务。
 - Actions 的 Python 插件测试、Swift 核心测试、可选 iOS 模拟器 UI 冒烟测试、IPA 和插件 ZIP 发布。
 
+## iPad 与 Mac 镜像布局
+
+设置中的“界面布局”可选自动、紧凑单栏或大屏分栏。布局以当前窗口宽度为准，
+适配 iPad 分屏和支持调整窗口大小的 iPhone 镜像；不根据设备型号强制放大。
+宽窗口可并排查看工作流/任务列表与详情、作品与预览，画布提供节点导航侧栏。
+⌘1–4 切换页面，⌘Return 运行画布/参数面板，或应用独立编辑页中的提示词。
+镜像能否自由调整窗口由 iOS/macOS 版本决定。
+
+作品页使用紧凑标题。历史 Output 的布局菜单同时控制文件夹与媒体的平铺、大图或列表。
+排序菜单支持时间、名称、大小及升降序；任务作品按任务合计大小排序，未知大小置后。
+目录排序需要插件 v0.8.0，在完整目录排序后分页，文件夹优先且不递归计算其大小。
+支持左侧边缘滑动返回：画布先保存，提示词有未应用修改时会确认，Output 返回父目录。
+
 ## 安装和连接
 
 1. 从 [Releases](https://github.com/xbunax/comfyuipocket/releases) 下载插件 ZIP，解压成 `ComfyUI/custom_nodes/comfyui_pocket/`，重启 ComfyUI。

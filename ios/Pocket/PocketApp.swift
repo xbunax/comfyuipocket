@@ -18,14 +18,16 @@ struct PocketApp: App {
 
 struct RootView: View {
     @Environment(PocketStore.self) private var store
+    @State private var selectedTab = 0
     var body: some View {
         @Bindable var store = store
-        TabView {
-            Tab("工作台", systemImage: "square.stack.3d.up") { LibraryView() }
-            Tab("任务", systemImage: "waveform.path") { QueueView() }
-            Tab("作品", systemImage: "photo.on.rectangle.angled") { GalleryView() }
-            Tab("连接", systemImage: "network") { ConnectionView() }
+        TabView(selection: $selectedTab) {
+            Tab("工作台", systemImage: "square.stack.3d.up", value: 0) { LibraryView().workspaceLayoutReader() }
+            Tab("任务", systemImage: "waveform.path", value: 1) { QueueView().workspaceLayoutReader() }
+            Tab("作品", systemImage: "photo.on.rectangle.angled", value: 2) { GalleryView().workspaceLayoutReader() }
+            Tab("连接", systemImage: "network", value: 3) { ConnectionView().workspaceLayoutReader() }
         }
+        .tabViewStyle(.sidebarAdaptable)
         .alert("需要处理", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了", role: .cancel) { store.error = nil }
         } message: { Text(store.error ?? "") }
@@ -39,6 +41,16 @@ struct RootView: View {
                 .task(id: notice) { try? await Task.sleep(for: .seconds(5)); if store.notice == notice { store.notice = nil } }
             }
         }
+        .background {
+            // Hardware keyboard commands also work through iPhone Mirroring.
+            Group {
+                Button("工作台") { selectedTab = 0 }.keyboardShortcut("1", modifiers: .command)
+                Button("任务") { selectedTab = 1 }.keyboardShortcut("2", modifiers: .command)
+                Button("作品") { selectedTab = 2 }.keyboardShortcut("3", modifiers: .command)
+                Button("连接") { selectedTab = 3 }.keyboardShortcut("4", modifiers: .command)
+            }.hidden().accessibilityHidden(true)
+        }
+        .workspaceLayoutReader()
     }
 }
 
@@ -164,6 +176,7 @@ struct ConnectionView: View {
                 }
             }
             .pocketListSurface()
+            .frame(maxWidth: 760).frame(maxWidth: .infinity).background(PocketBackground())
             .navigationTitle("连接")
         }
     }

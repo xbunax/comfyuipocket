@@ -14,13 +14,16 @@ private struct WorkflowGroup: Identifiable {
 
 struct LibraryView: View {
     @Environment(PocketStore.self) private var store
+    @Environment(\.workspaceLayout) private var layout
+    @State private var selectedWorkflow: String?
+    @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var importing = false
     @State private var search = ""
     @State private var showPrompts = false
     @State private var showSettings = false
     @AppStorage("collapsedWorkflowGroups") private var collapsedGroupsRaw = ""
     var body: some View {
-        NavigationStack {
+        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             ZStack {
                 PocketBackground()
                 if store.workflows.isEmpty {
@@ -33,7 +36,7 @@ struct LibraryView: View {
                         Button("提示词库", systemImage: "text.book.closed") { showPrompts = true }.buttonStyle(.glass)
                     }
                 } else {
-                    List {
+                    List(selection: $selectedWorkflow) {
                         Section {
                             VStack(alignment: .leading, spacing: 14) {
                                 PocketConnectionSummary()
@@ -83,9 +86,9 @@ struct LibraryView: View {
                     }.pocketListSurface()
                 }
             }
-            .navigationTitle("工作台")
+            .navigationTitle("工作台").navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "搜索工作流")
-            .navigationDestination(for: String.self) { WorkflowEditor(id: $0) }
+            .navigationSplitViewColumnWidth(min: 230, ideal: layout.navigationWidth, max: 340)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("设置", systemImage: "gearshape") { showSettings = true }
@@ -112,6 +115,22 @@ struct LibraryView: View {
                 }
             }
             .refreshable { await store.syncNow() }
+        } detail: {
+            if let selectedWorkflow {
+                WorkflowDestination(id: selectedWorkflow, onClose: { self.selectedWorkflow = nil; preferredColumn = .sidebar })
+                    .id(selectedWorkflow)
+            } else {
+                NavigationStack {
+                    ContentUnavailableView("选择工作流开始创作", systemImage: "square.stack.3d.up",
+                        description: Text("左侧可搜索、置顶和收纳工作流。参数会自动同步，画布保留原始节点布局。"))
+                }
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+        .environment(\.horizontalSizeClass, layout.usesColumns ? .regular : .compact)
+        .onChange(of: selectedWorkflow) { _, next in if next != nil { preferredColumn = .detail } }
+        .onChange(of: store.workflows.map(\.id)) { _, ids in
+            if let selectedWorkflow, !ids.contains(selectedWorkflow) { self.selectedWorkflow = nil; preferredColumn = .sidebar }
         }
     }
 
@@ -191,6 +210,7 @@ struct LibraryView: View {
             Button(store.isPinned(workflow.id) ? "取消置顶" : "置顶", systemImage: "pin") { store.togglePinned(workflow.id) }
             Button("复制", systemImage: "doc.on.doc") { store.duplicate(workflow) }
         }
+        .tag(workflow.id)
     }
 }
 
@@ -215,9 +235,36 @@ private struct WorkflowRow: View {
     }
 }
 
+/// Resolve the user's default before creating either editor. No intermediate sheet.
+private struct WorkflowDestination: View {
+    let onClose: () -> Void
+    @State private var workflowID: String
+    @State private var canvas: Bool
+    init(id: String, onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        _workflowID = State(initialValue: id)
+        _canvas = State(initialValue: UserDefaults.standard.string(forKey: "defaultWorkflowView") == "canvas")
+    }
+    var body: some View {
+        Group {
+            if canvas {
+                WorkflowCanvasHost(workflowID: workflowID, onFinish: onClose, onShowParameters: { id in
+                    workflowID = id; canvas = false
+                })
+            } else {
+                NavigationStack {
+                    WorkflowEditor(id: workflowID, onOpenCanvas: { canvas = true })
+                }
+                .edgeSwipeBack(action: onClose)
+            }
+        }
+    }
+}
+
 struct WorkflowEditor: View {
     @Environment(PocketStore.self) private var store
     let id: String
+    var onOpenCanvas: (() -> Void)? = nil
     @State private var showGraph = false
     @State private var showCanvas = false
     @State private var arranging = false
@@ -227,9 +274,8 @@ struct WorkflowEditor: View {
     @State private var batchCount = 1
     @State private var showBatchSettings = false
     @State private var selectedOutput: OutputImage?
-    init(id: String) {
-        self.id = id
-        _showCanvas = State(initialValue: UserDefaults.standard.string(forKey: "defaultWorkflowView") == "canvas")
+    init(id: String, onOpenCanvas: (() -> Void)? = nil) {
+        self.id = id; self.onOpenCanvas = onOpenCanvas
     }
     private var index: Int? { store.workflows.firstIndex { $0.id == id } }
     var body: some View {
@@ -242,7 +288,7 @@ struct WorkflowEditor: View {
                         TextField("工作流名称", text: Binding(get: { store.workflows[index].name }, set: { store.workflows[index].name = $0; store.save(); store.touch(id) }))
                             .font(.title3.bold())
                         HStack {
-                            Button("画布视图", systemImage: "square.3.layers.3d") { showCanvas = true }
+                            Button("画布视图", systemImage: "square.3.layers.3d") { openCanvas() }
                                 .accessibilityIdentifier("workflowCanvasButton")
                             Spacer()
                             Button(store.isPinned(id) ? "取消置顶" : "置顶工作流", systemImage: store.isPinned(id) ? "pin.fill" : "pin") {
@@ -313,6 +359,7 @@ struct WorkflowEditor: View {
                                 Label(store.busy ? "提交中" : (batchCount > 1 ? "运行 ×\(batchCount)" : "运行"), systemImage: "play.fill")
                                     .frame(maxWidth: .infinity).padding(.vertical, 5)
                             }.buttonStyle(.glassProminent).disabled(!store.connected || store.busy)
+                                .keyboardShortcut(.return, modifiers: .command)
                         }
                     }.padding(16).glassEffect(in: .rect(cornerRadius: 24)).padding(.horizontal, 16).padding(.bottom, 6)
                 }
@@ -321,7 +368,7 @@ struct WorkflowEditor: View {
                         Menu {
                             Button(arranging ? "完成排列" : "排列参数", systemImage: "arrow.up.arrow.down") { arranging.toggle() }
                             Button("节点依赖", systemImage: "point.3.connected.trianglepath.dotted") { showGraph = true }
-                            Button("画布视图", systemImage: "square.3.layers.3d") { showCanvas = true }
+                            Button("画布视图", systemImage: "square.3.layers.3d") { openCanvas() }
                             Button("导出工作流", systemImage: "square.and.arrow.up") {
                                 do { document = WorkflowDocument(data: try JSONEncoder().encode(workflow)); exporting = true }
                                 catch { store.error = error.localizedDescription }
@@ -341,6 +388,7 @@ struct WorkflowEditor: View {
         }
         .navigationTitle("创作").navigationBarTitleDisplayMode(.inline)
     }
+    private func openCanvas() { if let onOpenCanvas { onOpenCanvas() } else { showCanvas = true } }
 }
 
 private struct BatchSettingsView: View {

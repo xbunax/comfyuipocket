@@ -305,7 +305,7 @@ extension Workflow {
     }
 }
 
-struct OutputImage: Codable, Equatable, Identifiable {
+struct OutputImage: Codable, Equatable, Identifiable, Sendable {
     let promptID: String
     let filename: String
     let subfolder: String
