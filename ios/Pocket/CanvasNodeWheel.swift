@@ -4,6 +4,7 @@ import SwiftUI
 struct CanvasNodeNavigator: View {
     @Environment(PocketStore.self) private var store
     let session: CanvasSession
+    var openBookmarks: (() -> Void)? = nil
     @State private var search = ""
     @State private var favoritesOnly = false
     private var nodes: [MobileCanvasNode] {
@@ -21,6 +22,10 @@ struct CanvasNodeNavigator: View {
                 Label("节点导航", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
                 Spacer()
                 Text("\(session.orderedNodes.count)").font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary)
+                if let openBookmarks {
+                    Button(action: openBookmarks) { Image(systemName: "star").frame(width: 44, height: 44) }
+                        .buttonStyle(.borderless).accessibilityLabel("查看本工作流全部收藏")
+                }
             }.padding(.horizontal, 16).padding(.top, 16)
             TextField("搜索名称、类型或节点 ID", text: $search)
                 .textFieldStyle(.roundedBorder).padding(.horizontal, 12)
@@ -28,7 +33,6 @@ struct CanvasNodeNavigator: View {
                 Text("全部节点").tag(false)
                 Text("已收藏").tag(true)
             }.pickerStyle(.segmented).padding(.horizontal, 12)
-            CanvasNodeWheel(session: session)
             HStack {
                 Button("上一个", systemImage: "chevron.up") { move(-1) }
                 Spacer()

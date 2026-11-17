@@ -262,9 +262,44 @@
     };
   }
 
+  // Theme only the renderer's background argument. Never change node.color,
+  // bgcolor, widgets, geometry or serialization, even during a draw callback.
+  const appearanceRenderers = new WeakMap();
+  function setNodeAppearance(canvas, enabled, palette = {}) {
+    if (!canvas || typeof canvas.drawNodeShape !== "function") return false;
+    let state = appearanceRenderers.get(canvas);
+    if (!enabled) {
+      if (state) {
+        state.enabled = false;
+        if (canvas.drawNodeShape === state.wrapper) {
+          if (state.descriptor) Object.defineProperty(canvas, "drawNodeShape", state.descriptor);
+          else delete canvas.drawNodeShape;
+          appearanceRenderers.delete(canvas);
+        }
+      }
+      canvas.setDirty?.(true, true); return true;
+    }
+    if (!/^#[0-9a-f]{6}$/i.test(palette.surface || "")) return false;
+    if (!state || canvas.drawNodeShape !== state.wrapper) {
+      if (state) state.enabled = false;
+      const original = canvas.drawNodeShape;
+      state = { enabled: true, surface: palette.surface,
+        descriptor: Object.getOwnPropertyDescriptor(canvas, "drawNodeShape") };
+      const current = state;
+      current.wrapper = function(node, ctx, size, foreground, background, ...rest) {
+        return original.call(this, node, ctx, size, foreground,
+          current.enabled ? current.surface : background, ...rest);
+      };
+      canvas.drawNodeShape = current.wrapper;
+      appearanceRenderers.set(canvas, current);
+    }
+    state.enabled = true; state.surface = palette.surface;
+    canvas.setDirty?.(true, true); return true;
+  }
+
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera };
+    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance };
     return;
   }
 
@@ -443,6 +478,7 @@
     delete: "Comfy.Canvas.DeleteSelectedItems"
   };
   window.PocketCanvas = {
+    nodeAppearance(enabled, palette) { return setNodeAppearance(app?.canvas, enabled, palette); },
     async load(text) {
       await ready;
       textEditor?.reset();

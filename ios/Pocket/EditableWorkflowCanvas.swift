@@ -49,6 +49,7 @@ struct WorkflowCanvasView: View {
     @State private var showNodes = false
     @State private var showPorts = false
     @State private var showBookmarks = false
+    @State private var showSettings = false
     @State private var working = false
     @State private var exporting = false
     @State private var exportDocument = WorkflowDocument(data: Data())
@@ -73,16 +74,18 @@ struct WorkflowCanvasView: View {
                         }
                     }
                     if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
-                        Divider()
-                        CanvasNodeNavigator(session: session)
-                            .frame(width: 280).background(PocketPalette.surface)
+                        CanvasNodeNavigator(session: session, openBookmarks: { showBookmarks = true })
+                            .frame(width: 264).pocketGlassPanel()
+                            .padding(.vertical, 8).padding(.horizontal, 12)
                     }
                     }
+                    .background(PocketPalette.background)
                     .task(id: api.baseURL) {
                         store.canvasEditingID = workflowID
                         store.canvasEditingSession = session
                         store.canvasSessions.attach(session)
                         session.open(workflow: workflow, baseURL: api.baseURL)
+                        await session.applyAppearance()
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
                             guard !Task.isCancelled else { return }
@@ -100,56 +103,8 @@ struct WorkflowCanvasView: View {
             }
             .navigationTitle(workflow?.name ?? "工作流画布").navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        if let onShowParameters {
-                            Button("参数面板", systemImage: "slider.horizontal.3") {
-                                Task {
-                                    if session.loaded { guard await saveForAction() else { return } }
-                                    onShowParameters()
-                                }
-                            }
-                        }
-                        Button("切换工作流", systemImage: "square.stack") { showWorkflows = true }
-                        Group {
-                        Button(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板", systemImage: "sidebar.left") {
-                            Task { await session.setPanels(!session.showPanels) }
-                        }
-                        Divider()
-                        Button("撤销", systemImage: "arrow.uturn.backward") { command("undo") }
-                        Button("重做", systemImage: "arrow.uturn.forward") { command("redo") }
-                        Button("复制选中内容", systemImage: "doc.on.doc") { command("copy") }
-                        Button("粘贴", systemImage: "doc.on.clipboard") { command("paste") }
-                        Button("全选", systemImage: "checkmark.square") { command("selectAll") }
-                        Button("删除选中内容", systemImage: "trash", role: .destructive) { command("delete") }
-                        Button("导出工作流", systemImage: "square.and.arrow.up") {
-                            Task {
-                                guard await saveForAction(), let workflow = self.workflow else { return }
-                                do { exportDocument = WorkflowDocument(data: try JSONEncoder().encode(workflow)); exporting = true }
-                                catch { session.error = error.localizedDescription }
-                            }
-                        }
-                        }.disabled(!session.available)
-                    } label: { Image(systemName: "ellipsis.circle") }.disabled(submitting)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { Task { await run() } } label: {
-                        if submitting { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "play.fill").frame(minWidth: 26) }
-                    }.buttonStyle(.glassProminent).disabled(!session.loaded || submitting || store.busy)
-                        .accessibilityLabel("运行当前画布").accessibilityIdentifier("canvas.run")
-                        .keyboardShortcut(.return, modifiers: .command)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") {
-                        Task {
-                            if !session.loaded { finish(); return }
-                            if await saveForAction() { finish() }
-                        }
-                    }.disabled(working || submitting)
-                }
-            }
+            .background(PocketBackground())
+            .toolbar(.hidden, for: .navigationBar)
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                 header
@@ -188,7 +143,13 @@ struct WorkflowCanvasView: View {
             .sheet(isPresented: $showPorts) { CanvasConnections(session: session) }
             .sheet(isPresented: $showBookmarks) {
                 CanvasBookmarkSheet(session: session)
-                    .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showSettings) {
+                NavigationStack {
+                    AppSettingsView().toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("完成") { showSettings = false } }
+                    }
+                }
             }
             .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.serverID ?? "") }
             .sheet(isPresented: $showWorkflows) {
@@ -219,6 +180,9 @@ struct WorkflowCanvasView: View {
             .onChange(of: store.error) { _, message in
                 if let message, store.canvasEditingSession === session { session.error = message; store.error = nil }
             }
+            .onChange(of: PocketAppearance.shared.replacesNodeStyle) { _, _ in Task { await session.applyAppearance() } }
+            .onChange(of: PocketAppearance.shared.colorway) { _, _ in Task { await session.applyAppearance() } }
+            .onChange(of: session.available) { _, available in if available { Task { await session.applyAppearance() } } }
             .onDisappear {
                 if store.canvasEditingSession === session { store.canvasEditingID = nil; store.canvasEditingSession = nil }
                 store.canvasSessions.detach(session)
@@ -227,17 +191,84 @@ struct WorkflowCanvasView: View {
         }
     }
     private func finish() { if let onFinish { onFinish() } else { dismiss() } }
+    private var canvasMenu: some View {
+                    Menu {
+                        if let onShowParameters {
+                            Button("参数面板", systemImage: "slider.horizontal.3") {
+                                Task {
+                                    if session.loaded { guard await saveForAction() else { return } }
+                                    onShowParameters()
+                                }
+                            }
+                        }
+                        Button("设置", systemImage: "gearshape") { showSettings = true }
+                        Button("切换工作流", systemImage: "square.stack") { showWorkflows = true }
+                        Group {
+                        Button(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板", systemImage: "sidebar.left") {
+                            Task { await session.setPanels(!session.showPanels) }
+                        }
+                        Divider()
+                        Button("撤销", systemImage: "arrow.uturn.backward") { command("undo") }
+                        Button("重做", systemImage: "arrow.uturn.forward") { command("redo") }
+                        Button("复制选中内容", systemImage: "doc.on.doc") { command("copy") }
+                        Button("粘贴", systemImage: "doc.on.clipboard") { command("paste") }
+                        Button("全选", systemImage: "checkmark.square") { command("selectAll") }
+                        Button("删除选中内容", systemImage: "trash", role: .destructive) { command("delete") }
+                        Button("导出工作流", systemImage: "square.and.arrow.up") {
+                            Task {
+                                guard await saveForAction(), let workflow = self.workflow else { return }
+                                do { exportDocument = WorkflowDocument(data: try JSONEncoder().encode(workflow)); exporting = true }
+                                catch { session.error = error.localizedDescription }
+                            }
+                        }
+                        }.disabled(!session.available)
+                    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.disabled(submitting).buttonStyle(.glass).accessibilityLabel("画布菜单")
+    }
     private var header: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 6) {
-                Circle().fill(store.connected ? Color.green : Color.secondary).frame(width: 5, height: 5)
-                Text(store.client?.displayAddress ?? "未连接").lineLimit(1)
-                Spacer(minLength: 8)
-                Text(runStatus ?? (session.reused ? "缓存已就绪" : (working ? "保存中…" : "自动保存")))
-                    .lineLimit(1).foregroundStyle(submissionStatus == nil ? Color.secondary : PocketPalette.accent)
-            }.font(.caption2)
-            Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }.buttonStyle(.plain)
-        }.padding(.horizontal, 16).padding(.vertical, 8).background(PocketPalette.surface)
+        GlassEffectContainer(spacing: 10) {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        Task {
+                            if !session.loaded { finish(); return }
+                            if await saveForAction() { finish() }
+                        }
+                    } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
+                        .buttonStyle(.glass).disabled(working || submitting).accessibilityLabel("返回工作台")
+                    Button { showWorkflows = true } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 4) {
+                                Circle().fill(store.connected ? Color.green : Color.secondary).frame(width: 5, height: 5)
+                                Text(runStatus ?? (working ? "保存中…" : (session.reused ? "缓存已就绪" : "自动保存")))
+                                    .font(.caption2).foregroundStyle(PocketPalette.secondary).lineLimit(1)
+                            }
+                            Text(workflow?.name ?? "工作流画布").font(.subheadline.weight(.semibold))
+                                .foregroundStyle(PocketPalette.text).lineLimit(1)
+                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(.horizontal, 12)
+                    }.buttonStyle(.plain).pocketGlassPanel().accessibilityLabel("切换工作流")
+                        .frame(maxWidth: layout.showsCanvasInspector ? 340 : .infinity)
+                        .disabled(submitting || working)
+                    if layout.showsCanvasInspector {
+                        Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }
+                            .buttonStyle(.plain).padding(.horizontal, 12)
+                    }
+                    canvasMenu
+                    Button { Task { await run() } } label: {
+                        Group {
+                            if submitting { ProgressView().controlSize(.small) }
+                            else { Image(systemName: "play.fill") }
+                        }.frame(width: 44, height: 44)
+                    }.buttonStyle(.glassProminent).buttonBorderShape(.circle)
+                        .disabled(!session.loaded || submitting || store.busy)
+                        .accessibilityLabel("运行当前画布").accessibilityIdentifier("canvas.run")
+                        .keyboardShortcut(.return, modifiers: .command)
+                }
+                if !layout.showsCanvasInspector {
+                    Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }
+                        .buttonStyle(.plain).padding(.horizontal, 6)
+                }
+            }.padding(.horizontal, 12).padding(.vertical, 8)
+        }
     }
     private var controls: some View {
         VStack(spacing: 0) {
@@ -255,7 +286,7 @@ struct WorkflowCanvasView: View {
                     Button {
                         session.nodeFocusActive = false
                         Task { await session.action("fit") }
-                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 36, height: 36) }
+                    } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44) }
                         .accessibilityLabel("工作流总览").disabled(!session.available)
                     Button {
                         if layout.showsCanvasInspector { inspectorVisible.toggle() }
@@ -274,10 +305,6 @@ struct WorkflowCanvasView: View {
                         Image(systemName: "star").frame(width: 44, height: 44)
                     }.accessibilityLabel("收藏节点与快速定位").accessibilityIdentifier("canvas.bookmarks")
                         .disabled(!session.available)
-                    Button { Task { await session.setPanels(!session.showPanels) } } label: {
-                        Image(systemName: "sidebar.left").frame(width: 36, height: 36)
-                            .foregroundStyle(session.showPanels ? PocketPalette.accent : PocketPalette.text)
-                    }.accessibilityLabel(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板").disabled(!session.available)
                     Menu {
                         Button("聚焦当前节点", systemImage: "scope") {
                             session.nodeFocusActive = true
@@ -300,11 +327,11 @@ struct WorkflowCanvasView: View {
                         Button("重新加载画布", systemImage: "arrow.clockwise") {
                             if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL, force: true) }
                         }
-                    } label: { Image(systemName: "slider.horizontal.3").frame(width: 36, height: 36) }
+                    } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
                         .accessibilityLabel("画布工具").disabled(!session.loaded || submitting)
                 }.buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 5)
             }
-        }.background(PocketPalette.surface)
+        }.pocketGlassPanel().padding(.horizontal, 12).padding(.vertical, 8)
     }
     private func pollHardware(_ api: ComfyClient) async {
         var resourcesAvailable: Bool? = nil
@@ -454,6 +481,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard let webView else { throw PocketError.message("画布尚未启动。") }
         let scripts: [String: String] = [
             "scene": "return window.PocketCanvas.scene();",
+            "nodeAppearance": "return window.PocketCanvas.nodeAppearance(enabled, palette);",
             "widget": "return await window.PocketCanvas.widget(id, index, value, name);",
             "moveNode": "return window.PocketCanvas.moveNode(id, x, y);",
             "removeNode": "return window.PocketCanvas.removeNode(id);",
@@ -472,7 +500,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             "ports": "return window.PocketCanvas.ports();", "connect": "return window.PocketCanvas.connect(from, output, to, input);",
             "disconnect": "return window.PocketCanvas.disconnect(id, slot);"
         ]
-        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "focusBookmark", "fit", "zoom", "ports", "library", "subgraph", "viewport", "finishText", "chrome", "tools"]
+        let readOnlyMethods: Set<String> = ["load", "rebuild", "scene", "focus", "focusBookmark", "fit", "zoom", "ports", "library", "subgraph", "viewport", "finishText", "chrome", "tools", "nodeAppearance"]
         if !loaded && !readOnlyMethods.contains(method) { throw PocketError.message("请先解决画布参数差异，再进行修改。") }
         guard let script = scripts[method] else { throw PocketError.message("无效的画布操作。") }
         return try await webView.callAsyncJavaScript(script, arguments: arguments, in: nil, contentWorld: .page) ?? NSNull()
@@ -530,6 +558,19 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             _ = try await call("chrome", arguments: ["enabled": enabled])
             showPanels = enabled
             await refitViewport()
+        } catch { self.error = error.localizedDescription }
+    }
+    func applyAppearance() async {
+        guard available else { return }
+        let appearance = PocketAppearance.shared
+        // Canvas controls and custom widgets use their original dark renderer;
+        // a dark community surface preserves their contrast in light app mode.
+        let surface = String(format: "#%06X", appearance.colorway.tokens(dark: true).surface)
+        do {
+            let supported = try await call("nodeAppearance", arguments: ["enabled": appearance.replacesNodeStyle, "palette": ["surface": surface]]) as? Bool
+            if appearance.replacesNodeStyle && supported != true {
+                error = "当前 ComfyUI 绘制器不支持主题节点底色，已保留原生样式。"
+            }
         } catch { self.error = error.localizedDescription }
     }
     func setFloatingTools(_ enabled: Bool) async {

@@ -1,6 +1,57 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { executionNode, applyPrompt, ports, connect, disconnect } = require('../ios/Pocket/CanvasBridge.js');
+const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
+
+test('node appearance changes only draw arguments and restores the original renderer', () => {
+  const node = { color: '#335533', bgcolor: '#446644', pos: [17, 25], size: [320, 240], widgets: [{value: 'prompt'}] };
+  const snapshot = JSON.stringify(node);
+  const calls = [];
+  const prototype = { drawNodeShape(...args) { calls.push(args); assert.equal(JSON.stringify(node), snapshot); return 42; } };
+  const canvas = Object.create(prototype);
+  canvas.setDirty = () => {};
+  const original = canvas.drawNodeShape;
+  assert.equal(setNodeAppearance(canvas, false), true);
+  assert.equal(canvas.drawNodeShape, original);
+  assert.equal(setNodeAppearance(canvas, true, {surface: '#313244'}), true);
+  const wrapper = canvas.drawNodeShape;
+  assert.equal(canvas.drawNodeShape(node, {}, node.size, node.color, node.bgcolor, true), 42);
+  assert.equal(calls[0][0], node);
+  assert.equal(calls[0][3], node.color);
+  assert.equal(calls[0][4], '#313244');
+  assert.equal(setNodeAppearance(canvas, true, {surface: '#3c3836'}), true);
+  assert.equal(canvas.drawNodeShape, wrapper);
+  canvas.drawNodeShape(node, {}, node.size, node.color, node.bgcolor, true);
+  assert.equal(calls[1][4], '#3c3836');
+  setNodeAppearance(canvas, false);
+  assert.equal(canvas.drawNodeShape, original);
+  assert.equal(Object.hasOwn(canvas, 'drawNodeShape'), false);
+  assert.equal(JSON.stringify(node), snapshot);
+});
+
+test('appearance preserves extension render wrappers and rejects invalid colors', () => {
+  let background;
+  const canvas = { drawNodeShape(n, c, s, fg, bg) { background = bg; }, setDirty() {} };
+  const original = canvas.drawNodeShape;
+  assert.equal(setNodeAppearance(canvas, true, {surface: 'url(secret)'}), false);
+  assert.equal(canvas.drawNodeShape, original);
+  setNodeAppearance(canvas, true, {surface: '#313244'});
+  const pocket = canvas.drawNodeShape;
+  let extensionCalls = 0;
+  canvas.drawNodeShape = function(...args) { extensionCalls++; return pocket.apply(this, args); };
+  const extension = canvas.drawNodeShape;
+  setNodeAppearance(canvas, false);
+  assert.equal(canvas.drawNodeShape, extension);
+  canvas.drawNodeShape({}, {}, [], '#fff', '#456');
+  assert.equal(background, '#456');
+  assert.equal(extensionCalls, 1);
+  setNodeAppearance(canvas, true, {surface: '#3c3836'});
+  canvas.drawNodeShape({}, {}, [], '#fff', '#456');
+  assert.equal(background, '#3c3836');
+  setNodeAppearance(canvas, false);
+  assert.equal(canvas.drawNodeShape, extension);
+  assert.equal(setNodeAppearance({}, true, {surface: '#313244'}), false);
+});
 
 function fixture() {
   const source = { id: 1, title: 'Source', outputs: [{ name: 'IMAGE', type: 'IMAGE' }], inputs: [],

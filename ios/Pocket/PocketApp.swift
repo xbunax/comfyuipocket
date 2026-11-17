@@ -81,7 +81,6 @@ extension View {
             .listSectionSpacing(14)
             .scrollContentBackground(.hidden)
             .foregroundStyle(PocketPalette.text)
-            .toolbarBackground(PocketPalette.background, for: .navigationBar)
             .background(PocketBackground())
     }
 }
