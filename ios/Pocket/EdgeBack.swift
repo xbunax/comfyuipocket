@@ -31,7 +31,7 @@ private final class EdgeBackView: UIView, UIGestureRecognizerDelegate {
         if installedWindow !== window { detach(); window?.addGestureRecognizer(edge); installedWindow = window }
     }
     func detach() { installedWindow?.removeGestureRecognizer(edge); installedWindow = nil }
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard enabled, let window, !isHidden, !bounds.isEmpty,
               convert(bounds, to: window).contains(gestureRecognizer.location(in: window)) else { return false }
         // A covered editor must never react to swipes in its sheet or alert.
