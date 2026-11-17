@@ -494,6 +494,10 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let body = message.body as? [String: Any] else { return }
         switch body["type"] as? String {
+        case "foreignGraph":
+            // Keep navigation available, but never save this graph over the
+            // original. A later open updates graph data in the cached runtime.
+            loaded = false; revision = nil
         case "loading": if loading { loadingMessage = body["message"] as? String ?? loadingMessage }
         case "textEditing":
             textEditing = body["active"] as? Bool ?? false

@@ -463,7 +463,10 @@
       // while an input or IME composition is active; the next autosave commits it.
       if (textEditor?.editing) return null;
       if (!loaded || mismatch) throw new Error("画布尚未准备好保存。");
-      if (ownedGraphID && app.rootGraph.id !== ownedGraphID) throw new Error("ComfyUI 面板已切换到其他工作流。请使用手机画布菜单中的“切换工作流”，或重新加载当前画布，避免覆盖原工作流。");
+      if (ownedGraphID && app.rootGraph.id !== ownedGraphID) {
+        send("foreignGraph");
+        throw new Error("ComfyUI 面板已切换到其他工作流。请使用手机画布菜单中的“切换工作流”，或重新加载当前画布，避免覆盖原工作流。");
+      }
       const { workflow } = await app.graphToPrompt(app.rootGraph);
       if (textEditor?.editing) return null;
       const output = await executablePrompt(app, initialPrompt);
