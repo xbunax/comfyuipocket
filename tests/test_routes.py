@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -74,6 +75,57 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
         self.addAsyncCleanup(self.client.close)
+
+    async def test_output_browser_folders_paging_and_media_without_history(self):
+        (self.media_root / "相册").mkdir()
+        (self.media_root / "empty").mkdir()
+        (self.media_root / "old.png").write_bytes(b"old")
+        (self.media_root / "new.mp4").write_bytes(b"video")
+        (self.media_root / "keep.json").write_text("{}")
+        (self.media_root / "相册" / "图 1.PNG").write_bytes(b"image")
+        os.utime(self.media_root / "old.png", (100, 100))
+        os.utime(self.media_root / "new.mp4", (200, 200))
+        response = await self.client.get("/pocket/v1/outputs", params={"limit": "2"})
+        self.assertEqual(response.status, 200)
+        first = await response.json()
+        self.assertEqual(first["folder"], "")
+        self.assertEqual(first["total"], 4)
+        self.assertEqual([item["kind"] for item in first["entries"]], ["folder", "folder"])
+        self.assertEqual(first["nextOffset"], 2)
+        second = await (await self.client.get("/pocket/v1/outputs", params={"offset": "2", "limit": "2"})).json()
+        self.assertEqual([item["name"] for item in second["entries"]], ["new.mp4", "old.png"])
+        self.assertIsNone(second["nextOffset"])
+        nested = await (await self.client.get("/pocket/v1/outputs", params={"folder": "相册"})).json()
+        self.assertEqual(nested["entries"][0]["path"], "相册/图 1.PNG")
+        self.assertEqual(nested["entries"][0]["subfolder"], "相册")
+        self.assertEqual(nested["entries"][0]["size"], 5)
+        empty = await (await self.client.get("/pocket/v1/outputs", params={"folder": "empty"})).json()
+        self.assertEqual(empty["total"], 0)
+        self.assertEqual(empty["entries"], [])
+        info = await (await self.client.get("/pocket/v1/info")).json()
+        self.assertIn("output-browser", info["capabilities"])
+
+    async def test_output_browser_rejects_invalid_paths_pages_and_unknown_users(self):
+        for folder in ("../", "/", "a/../../", "C:/", "a\\b", "a/./b", "\x00"):
+            response = await self.client.get("/pocket/v1/outputs", params={"folder": folder})
+            self.assertEqual(response.status, 400, folder)
+        for query in ({"offset": "-1"}, {"offset": "bad"}, {"limit": "0"}, {"limit": "101"}):
+            self.assertEqual((await self.client.get("/pocket/v1/outputs", params=query)).status, 400)
+        self.assertEqual((await self.client.get("/pocket/v1/outputs", params={"folder": "missing"})).status, 404)
+        self.assertEqual((await self.client.get("/pocket/v1/outputs", headers={"comfy-user": "unknown"})).status, 403)
+
+    async def test_output_browser_does_not_follow_links(self):
+        outside = pathlib.Path(self.temp.name) / "outside"
+        outside.mkdir(); (outside / "private.png").write_bytes(b"private")
+        try:
+            (self.media_root / "linked").symlink_to(outside, target_is_directory=True)
+            (self.media_root / "linked.png").symlink_to(outside / "private.png")
+        except OSError:
+            self.skipTest("Creating symbolic links is not permitted on this host")
+        page = await (await self.client.get("/pocket/v1/outputs")).json()
+        self.assertEqual(page["entries"], [])
+        response = await self.client.get("/pocket/v1/outputs", params={"folder": "linked"})
+        self.assertEqual(response.status, 400)
 
     async def test_media_delete_is_scoped_idempotent_and_requires_same_origin(self):
         target = self.media_root / "nested" / "a.png"

@@ -1,8 +1,57 @@
+import os
 from pathlib import Path, PurePosixPath
 
 
 MEDIA_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".heic", ".tif", ".tiff",
                     ".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"}
+
+
+def linked(path):
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def list_output(directory, folder="", offset=0, limit=60):
+    """List one output directory, without following links or scanning descendants."""
+    if (not isinstance(folder, str) or any(c in folder for c in "\\:\x00\r\n")
+            or folder.startswith("/") or any(p in (".", "..") for p in folder.split("/"))):
+        raise ValueError("Invalid output folder")
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("Invalid page")
+    root = Path(directory).resolve()
+    relative = PurePosixPath(folder)
+    current = root
+    for part in relative.parts:
+        current /= part
+        if linked(current):
+            raise ValueError("Linked folders cannot be browsed")
+    current = current.resolve()
+    if current != root and root not in current.parents:
+        raise ValueError("Output folder escapes its directory")
+    if not current.is_dir():
+        raise FileNotFoundError("Output folder not found")
+    folder = current.relative_to(root).as_posix() if current != root else ""
+    entries = []
+    with os.scandir(current) as children:
+        for child in children:
+            try:
+                path = Path(child.path)
+                if linked(path) or any(c in child.name for c in "\\:\x00\r\n"):
+                    continue
+                is_folder = child.is_dir(follow_symlinks=False)
+                if not is_folder and (not child.is_file(follow_symlinks=False)
+                                      or path.suffix.lower() not in MEDIA_EXTENSIONS):
+                    continue
+                stat = child.stat(follow_symlinks=False)
+                entries.append({"name": child.name, "path": f"{folder}/{child.name}" if folder else child.name,
+                                "kind": "folder" if is_folder else "file", "subfolder": folder,
+                                "size": 0 if is_folder else stat.st_size,
+                                "modified": stat.st_mtime_ns // 1_000_000})
+            except OSError:
+                continue  # A concurrently removed or inaccessible file must not break the page.
+    entries.sort(key=lambda item: (0, item["name"].casefold(), item["name"]) if item["kind"] == "folder"
+                 else (1, -item["modified"], item["name"].casefold(), item["name"]))
+    return {"folder": folder, "entries": entries[offset:offset + limit], "total": len(entries),
+            "nextOffset": offset + limit if offset + limit < len(entries) else None}
 
 
 def delete_media(data, directories):

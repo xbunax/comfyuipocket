@@ -332,6 +332,7 @@ struct TaskDetailView: View {
 
 struct GalleryView: View {
     @Environment(PocketStore.self) private var store
+    @State private var section = "tasks"
     @State private var selected: OutputImage?
     @State private var removing: OutputImage?
     @State private var expanded: Set<String> = []
@@ -344,7 +345,10 @@ struct GalleryView: View {
         NavigationStack {
             ZStack {
                 PocketBackground()
-                if groups.isEmpty {
+                if section == "output" {
+                    OutputBrowserView()
+                        .id(store.client?.baseURL.absoluteString ?? "")
+                } else if groups.isEmpty {
                     ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
                 } else {
                     ScrollView {
@@ -363,7 +367,18 @@ struct GalleryView: View {
                     }.refreshable { await store.refresh() }
                 }
             }.navigationTitle("作品")
-                .toolbar { Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh() } }.disabled(!store.connected) }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Picker("作品来源", selection: $section) {
+                        Text("任务作品").tag("tasks")
+                        Text("历史 Output").tag("output")
+                    }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.bar)
+                }
+                .toolbar {
+                    if section == "tasks" {
+                        Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh() } }.disabled(!store.connected)
+                    }
+                }
                 .sheet(item: $selected) { ImageDetail(output: $0) }
                 .workDeletionDialog($removing)
                 .onChange(of: store.client?.baseURL) { _, _ in expanded.removeAll() }
@@ -454,6 +469,8 @@ struct ImageDetail: View {
     @Environment(PocketStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let output: OutputImage
+    var allowDeletion = true
+    var knownRecord: MediaProvenance? = nil
     @State private var image: UIImage?
     @State private var shareURL: URL?
     @State private var status = ""
@@ -497,9 +514,11 @@ struct ImageDetail: View {
                 if !status.isEmpty { Text(status).font(.caption).padding() }
             }.navigationTitle("作品预览").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("删除作品", systemImage: "trash", role: .destructive) { removing = output }
-                            .disabled(store.deletingOutputs.contains(output.id))
+                    if allowDeletion {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("删除作品", systemImage: "trash", role: .destructive) { removing = output }
+                                .disabled(store.deletingOutputs.contains(output.id))
+                        }
                     }
                     ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
                 }
@@ -510,7 +529,7 @@ struct ImageDetail: View {
                         guard let api = store.client else { return }
                         var archive = store.currentMediaArchive
                         archive.rememberTasks(store.currentGenerationTasks)
-                        record = archive.provenance?[output.promptID]
+                        record = knownRecord ?? archive.provenance?[output.promptID]
                         let file = try await api.download(output)
                         guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return }
                         shareURL = file

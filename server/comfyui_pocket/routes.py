@@ -7,7 +7,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .catalog import Catalog, MAX_BYTES, VERSION
-from .media import delete_media
+from .media import delete_media, list_output
 
 
 def same_origin(request):
@@ -63,7 +63,25 @@ def register_routes():
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser"]})
+
+    @routes.get("/pocket/v1/outputs")
+    async def outputs(request):
+        import folder_paths
+
+        catalog_for(request)
+        try:
+            result = await asyncio.to_thread(list_output, folder_paths.get_output_directory(),
+                                            request.query.get("folder", ""),
+                                            int(request.query.get("offset", "0")),
+                                            int(request.query.get("limit", "60")))
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text="Output folder not found") from exc
+        except OSError as exc:
+            raise web.HTTPForbidden(text="Output folder is not accessible") from exc
+        return web.json_response(result)
 
     @routes.post("/pocket/v1/media/delete")
     async def remove_media(request):

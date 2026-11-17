@@ -17,6 +17,7 @@ struct LibraryView: View {
     @State private var importing = false
     @State private var search = ""
     @State private var showPrompts = false
+    @State private var showSettings = false
     @AppStorage("collapsedWorkflowGroups") private var collapsedGroupsRaw = ""
     var body: some View {
         NavigationStack {
@@ -86,6 +87,9 @@ struct LibraryView: View {
             .searchable(text: $search, prompt: "搜索工作流")
             .navigationDestination(for: String.self) { WorkflowEditor(id: $0) }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("设置", systemImage: "gearshape") { showSettings = true }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("提示词库", systemImage: "text.book.closed") { showPrompts = true }
                 }
@@ -100,6 +104,13 @@ struct LibraryView: View {
                 switch result { case .success(let url): store.importFile(url); case .failure(let error): store.error = error.localizedDescription }
             }
             .sheet(isPresented: $showPrompts) { PromptLibraryView() }
+            .sheet(isPresented: $showSettings) {
+                NavigationStack {
+                    AppSettingsView().toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("完成") { showSettings = false } }
+                    }
+                }
+            }
             .refreshable { await store.syncNow() }
         }
     }
@@ -216,6 +227,10 @@ struct WorkflowEditor: View {
     @State private var batchCount = 1
     @State private var showBatchSettings = false
     @State private var selectedOutput: OutputImage?
+    init(id: String) {
+        self.id = id
+        _showCanvas = State(initialValue: UserDefaults.standard.string(forKey: "defaultWorkflowView") == "canvas")
+    }
     private var index: Int? { store.workflows.firstIndex { $0.id == id } }
     var body: some View {
         Group {

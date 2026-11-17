@@ -152,6 +152,9 @@ struct ConnectionView: View {
                         }.font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8)
                     }
                 }
+                Section("偏好设置") {
+                    NavigationLink { AppSettingsView() } label: { Label("设置", systemImage: "gearshape") }
+                }
                 Section("图片缓存") {
                     Text("自动复用图片和视频首帧预览，内存上限 32 MB，磁盘上限 256 MB。")
                         .font(.footnote).foregroundStyle(.secondary)

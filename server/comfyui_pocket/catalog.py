@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 MAX_BYTES = 20 * 1024 * 1024
 ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 

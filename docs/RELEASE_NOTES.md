@@ -1,14 +1,17 @@
-ComfyUI Pocket v0.10.1
+ComfyUI Pocket v0.11.0
 
-- Fix HTTP connections to user-selected IPv6 servers being blocked by App
-  Transport Security. Remove the fine-grained local networking ATS key that
-  overrides the existing arbitrary-load exception on current iOS. The same
-  policy covers API requests, WebSocket connections, media and the canvas.
-- Keep the local network privacy usage description and normal HTTPS certificate
-  validation. Add a CI check of the actual archived app's transport policy before
-  publishing an IPA.
+- Add Settings from the workbench gear button and Connection page. Choose the
+  default workflow view: parameter panel or original workflow canvas. The choice
+  persists on the phone; both views remain accessible.
+- Add Task Works / Historical Output tabs to the gallery. Browse the current
+  server's output directory by its original folders, with breadcrumbs, newest
+  media first, 60-entry pages, refresh, cached thumbnails and full media previews.
+  Existing output files remain browsable even without ComfyUI task history.
+- Update the Pocket plugin to v0.7.0 with a read-only paged output listing endpoint.
+  Restrict it to the configured output directory; reject path traversal, symbolic
+  links and Windows junctions. Switching servers resets the browser and prevents
+  stale requests from showing another server's files.
 
-Existing Pocket server plugin v0.6.0 remains compatible; no reinstall is required.
-This fixes the app-side ATS rejection. The server must still listen on IPv6 and
-be reachable from the phone's network. No simulator tests are run; sign and test
-the device IPA on the iPhone.
+Historical Output requires the new plugin and a ComfyUI restart. Task-grouped
+works, existing workflows and the v0.10.1 IPv6 HTTP transport fix are preserved.
+Device IPA build only; simulator tests are not run. Sign and test on an iPhone.

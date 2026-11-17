@@ -19,6 +19,14 @@ API: `GET /pocket/v1/info`, `GET /pocket/v1/comfy-workflows`,
 `GET /pocket/v1/comfy-workflows/file?path=...`, `GET/POST /pocket/v1/workflows`,
 `GET/DELETE /pocket/v1/workflows/{id}`.
 
+Version 0.7.0 adds `GET /pocket/v1/outputs?folder=&offset=0&limit=60` and the
+`output-browser` capability. It lists one level of the configured ComfyUI output
+directory, with folders first and media files newest first. Pages contain at most
+100 entries, file sizes and modification timestamps. Existing `/view` serves the
+media. Listing does not depend on task history, scan subdirectories recursively,
+or follow symbolic links / Windows junctions. User access is checked before listing.
+Update the plugin and restart ComfyUI to enable the phone's Historical Output tab.
+
 Catalog entries include `updatedAt` (milliseconds). The plugin respects ComfyUI's
 `comfy-user` storage routing. Bounded JSON, atomic writes, stable 32-hex identifiers,
 and origin validation prevent path traversal, partial files and browser cross-origin
