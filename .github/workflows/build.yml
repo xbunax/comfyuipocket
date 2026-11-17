@@ -170,6 +170,8 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/pocket-signing/build.keychain-db" 2>/dev/null || true
           if [[ -n "${POCKET_PROFILE:-}" ]]; then rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$POCKET_PROFILE.mobileprovision"; fi
           rm -rf "$RUNNER_TEMP/pocket-signing"
+      - name: Verify archived transport policy
+        run: python3 scripts/check_transport_policy.py build/Pocket.xcarchive/Products/Applications/ComfyUIPocket.app/Info.plist
       - name: Upload device logs
         if: always()
         uses: actions/upload-artifact@v4

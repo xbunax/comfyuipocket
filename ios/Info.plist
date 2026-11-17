@@ -14,8 +14,10 @@
   <key>NSLocalNetworkUsageDescription</key><string>通过你填写的 IP 和端口直接访问自己的 ComfyUI 服务器。</string>
   <key>NSPhotoLibraryAddUsageDescription</key><string>将生成的图片保存到照片图库。</string>
   <key>NSAppTransportSecurity</key><dict>
+    <!-- User-selected ComfyUI servers may use HTTP on public IPv4/IPv6 addresses.
+         Do not add fine-grained global ATS keys here: their presence overrides
+         NSAllowsArbitraryLoads on current iOS, even when their value is false. -->
     <key>NSAllowsArbitraryLoads</key><true/>
-    <key>NSAllowsLocalNetworking</key><true/>
   </dict>
   <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
   <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
