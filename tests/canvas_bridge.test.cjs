@@ -231,6 +231,15 @@ test('restoring executed nodes follows the API prompt without activating unrelat
   restoreExecutionModes(f.app,{'1':{class_type:'Source',inputs:{}}});
   assert.equal(f.source.mode,0);assert.equal(f.target.mode,4);
 });
+test('custom serializer bypass remains bypassed and retains its execution flag', async () => {
+  const f=fixture(); Object.assign(f.source,{type:'QwenImagePromptOptimizer',mode:4});
+  const prompt={'1':{class_type:'QwenImagePromptOptimizer',inputs:{goohai_bypass:true}}};
+  f.app.graphToPrompt=async()=>({output:{'1':{class_type:'QwenImagePromptOptimizer',inputs:f.source.mode===4?{goohai_bypass:true}:{}}}});
+  const {output}=await f.app.graphToPrompt();
+  restoreExecutionModes(f.app,prompt,output);
+  assert.equal(f.source.mode,4);
+  assert.deepEqual(await applyPrompt(f.app,prompt),[]);
+});
 test('wheel focus fits tall and wide nodes within both viewport axes without editing geometry', () => {
   const f=fixture(); const selected=[];
   Object.assign(f.app.canvas,{canvas:{getBoundingClientRect:()=>({width:360,height:500})},ds:{scale:1,offset:[0,0]},selectNode:n=>selected.push(n.id)});

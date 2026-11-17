@@ -273,9 +273,13 @@
     canvas.setDirty(true, true); return true;
   }
 
-  function restoreExecutionModes(app, prompt) {
+  function restoreExecutionModes(app, prompt, currentOutput = {}) {
     for (const [id, spec] of Object.entries(prompt)) {
       const node = executionNode(app.rootGraph, id);
+      // Custom serializers can deliberately emit bypassed nodes (e.g. Goohai's
+      // string-only bypass). Their existing execution output preserves that
+      // behavior; activating the graph node would silently enable model inference.
+      if (currentOutput[id]?.class_type === spec.class_type) continue;
       // The saved API prompt is authoritative about which concrete nodes execute.
       // Never activate annotations, virtual nodes, or a different node class.
       if (node?.type === spec.class_type && (node.mode === 2 || node.mode === 4)) node.mode = 0;
@@ -533,7 +537,9 @@
         await loadWorkflowGraph(app, value.workflow, value.name);
         await new Promise(resolve => setTimeout(resolve, 0));
         requireWorkflow(app, value.workflow);
-        restoreExecutionModes(app, value.prompt);
+        const currentOutput = await executablePrompt(app, value.prompt);
+        requireWorkflow(app, value.workflow);
+        restoreExecutionModes(app, value.prompt, currentOutput);
         let unmapped = await applyPrompt(app, value.prompt, value.workflow);
         // Third-party widgets may finish configuration on animation frames.
         for (const delay of [100, 300]) {

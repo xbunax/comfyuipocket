@@ -10,6 +10,9 @@ ComfyUI Pocket v0.14.1
   cannot save another canvas into the current workflow.
 - Add regression coverage for delayed tab restoration, displaced graph loads,
   and node ID collisions. Preserve the original workflows and custom nodes.
+- Preserve custom nodes that already serialize in bypass mode. In particular,
+  Goohai Qwen's string-only bypass must retain its goohai_bypass flag and must
+  not be switched into normal model execution when opening the canvas.
 
 Pocket plugin remains 0.9.0; no reinstall required. Device IPA build only, no
 simulator tests. Verify opening MiniMax, Qwen and switching between cached
