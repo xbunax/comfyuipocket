@@ -76,6 +76,11 @@ final class GenerationActivities {
     func update(tasks: [GenerationTask], queue: JSONValue, history: JSONValue,
                 activePrompt: String, progress: Double) {
         guard !tracked.isEmpty else { return }
+        let currentIDs = Set(tasks.map(\.id))
+        for id in tracked.keys.filter({ !currentIDs.contains($0) }) {
+            endExecution(id, success: false)
+            tracked.removeValue(forKey: id)
+        }
         for task in tasks where tracked[task.id] != nil {
             let summary = task.summary(queue: queue, history: history)
             let state = GenerationActivityState(task: task, summary: summary, activePrompt: activePrompt, progress: progress)

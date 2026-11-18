@@ -70,8 +70,8 @@ struct GenerationActivityState {
         terminal = !task.submitting && !summary.active && summary.finished == task.items.count
         succeeded = terminal && summary.completed == task.requestedCount && task.submissionError == nil
         let sampling = !terminal && progress.isFinite && task.items.contains { $0.id == activePrompt }
-        let nodePercent = sampling ? Int(min(0.99, max(0, progress)) * 100) : 0
-        units = Int64(summary.finished * 100 + nodePercent)
+        let nodePercent = sampling ? Int(min(1, max(0, progress)) * 100) : 0
+        units = Int64(summary.finished * 100 + min(99, nodePercent))
         let count = "\(summary.completed)/\(task.requestedCount)"
         if terminal {
             subtitle = succeeded ? "已完成 \(count)" : "已结束 · 成功 \(count)"
