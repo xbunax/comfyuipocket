@@ -44,6 +44,7 @@ struct CanvasAssetSidebar: View {
     @State private var loading = false
     @State private var failure: String?
     @State private var requestID = UUID()
+    @ScaledMetric(relativeTo: .caption2) private var statusHeight: CGFloat = 44
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -75,26 +76,31 @@ struct CanvasAssetSidebar: View {
                 }
                 .refreshable { if source != .recent { await load() } }
             }
-            if importing {
-                ProgressView("正在导入…").font(.caption).controlSize(.small)
-            } else if let selected {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(selected.asset.filename).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
-                        Text(message ?? "点画布里的节点或参考图区。").lineLimit(2)
-                    }
-                    Spacer(minLength: 4)
-                    Button("取消", action: cancelSelection).buttonStyle(.borderless)
-                }.font(.caption2).foregroundStyle(PocketPalette.secondary)
-            } else {
-                Text(message ?? "长按拖入画布，或点选素材再点目标节点。")
-                    .font(.caption2).foregroundStyle(PocketPalette.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            importStatus.frame(height: horizontal ? statusHeight : nil, alignment: .topLeading)
         }
         .padding(.horizontal, 10).padding(.bottom, 10).padding(.top, 4)
         .frame(maxWidth: horizontal ? .infinity : nil, maxHeight: horizontal ? nil : .infinity, alignment: .topLeading)
         .task(id: "\(store.client?.serverID ?? "")/\(source.id)/\(folder)/\(store.outputDirectoryRevision)/\(store.pluginCapabilities.sorted())") { await load() }
+    }
+
+    @ViewBuilder private var importStatus: some View {
+        if importing {
+            ProgressView("正在导入…").font(.caption).controlSize(.small)
+        } else if let selected {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selected.asset.filename).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                    Text(message ?? "点画布里的节点或参考图区。").lineLimit(2)
+                }
+                Spacer(minLength: 4)
+                Button("取消", action: cancelSelection).buttonStyle(.borderless)
+            }.font(.caption2).foregroundStyle(PocketPalette.secondary)
+        } else {
+            Text(message ?? "长按拖入画布，或点选素材再点目标节点。")
+                .font(.caption2).foregroundStyle(PocketPalette.secondary)
+                .lineLimit(horizontal ? 2 : nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var sourcePicker: some View {

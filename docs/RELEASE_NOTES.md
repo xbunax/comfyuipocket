@@ -1,4 +1,4 @@
-ComfyUI Pocket v0.17.3
+ComfyUI Pocket v0.17.4
 
-- Route imports onto the actual file field when a Load Image or Load Video node also exposes an upload button.
-- Accept selected assets from the loader title, controls, and preview.
+- Normalize Windows folder separators from ComfyUI history before importing or deleting server assets.
+- Keep the phone canvas viewport stable while the asset panel shows import progress and errors. Restore the focused node after an import failure.

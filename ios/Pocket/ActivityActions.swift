@@ -64,7 +64,7 @@ extension PocketStore {
                 throw PocketError.message("请更新电脑端 Pocket 插件并重启 ComfyUI。")
             }
             let result = try await api.json("pocket/v1/media/delete", method: "POST", body: .object([
-                "filename": .string(output.filename), "subfolder": .string(output.subfolder), "type": .string(output.type)
+                "filename": .string(output.filename), "subfolder": .string(output.portableSubfolder), "type": .string(output.type)
             ]))
             guard result["deleted"] == .bool(true) else { throw PocketError.message("服务器未确认删除文件。") }
         }

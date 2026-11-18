@@ -6,6 +6,14 @@ import XCTest
 #endif
 
 final class ModelTests: XCTestCase {
+    func testWindowsHistorySubfolderCanBeSentToPortableMediaEndpoints() throws {
+        let data = Data(#"{"filename":"z_00007_.png","subfolder":"z图像\\2026-11-18","type":"output","promptID":"id"}"#.utf8)
+        let asset = try JSONDecoder().decode(OutputImage.self, from: data)
+        XCTAssertEqual(asset.portableSubfolder, "z图像/2026-11-18")
+        XCTAssertEqual(asset.assetID, #"output/z图像\2026-11-18/z_00007_.png"#)
+        let root = OutputImage(promptID: "id", filename: "a.png", subfolder: "", type: "output")
+        XCTAssertEqual(root.portableSubfolder, "")
+    }
     func testResolutionPairsOnlyNumericInputsOnTheSameNode() throws {
         let workflow = try Workflow.load(Data(#"{"1":{"class_type":"Size","inputs":{"width":512,"height":768}},"2":{"class_type":"Resize","inputs":{"width":["1",0],"height":512}},"3":{"class_type":"Size","inputs":{"width":1024}}}"#.utf8), name: "Resolution")
         let first = workflow.fields.filter { $0.nodeID == "1" }

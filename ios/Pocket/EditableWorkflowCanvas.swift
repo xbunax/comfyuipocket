@@ -508,7 +508,7 @@ struct WorkflowCanvasView: View {
                 guard drag.serverID == api.serverID else { throw PocketError.message("请在同一服务器的画布中导入资产。") }
                 let asset = drag.asset, token = UUID().uuidString
                 let target = try await session.call("prepareAsset", arguments: ["x": point.x, "y": point.y, "token": token, "asset": [
-                    "filename": asset.filename, "subfolder": asset.subfolder, "type": asset.type,
+                    "filename": asset.filename, "subfolder": asset.portableSubfolder, "type": asset.type,
                     "media_kind": asset.isVideo ? "video" : "image"
                 ]]) as? String
                 if target == "reference" {
@@ -532,7 +532,9 @@ struct WorkflowCanvasView: View {
                 }
                 selectedAsset = nil
             } catch {
-                assetMessage = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                assetMessage = message.hasPrefix("Error: ") ? String(message.dropFirst(7)) : message
+                if store.canvasEditingSession === session { await session.focusSelection() }
             }
         }
     }

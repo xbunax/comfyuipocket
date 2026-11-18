@@ -94,7 +94,7 @@ final class ComfyClient {
     }
     func importAsset(_ asset: OutputImage) async throws -> String {
         let result = try await json("pocket/v1/media/import", method: "POST", body: .object([
-            "type": .string(asset.type), "subfolder": .string(asset.subfolder), "filename": .string(asset.filename)
+            "type": .string(asset.type), "subfolder": .string(asset.portableSubfolder), "filename": .string(asset.filename)
         ]))
         guard let value = result["value"].text.nonEmpty else { throw PocketError.message("服务器没有返回输入文件路径。") }
         return value

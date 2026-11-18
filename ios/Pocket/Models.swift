@@ -312,6 +312,7 @@ struct OutputImage: Codable, Equatable, Identifiable, Sendable {
     let filename: String
     let subfolder: String
     let type: String
+    var portableSubfolder: String { subfolder.replacingOccurrences(of: "\\", with: "/") }
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
     var assetID: String { "\(type)/\(subfolder)/\(filename)" }
     var isVideo: Bool { ["mp4", "mov", "webm", "m4v", "avi", "mkv"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
