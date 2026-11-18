@@ -102,6 +102,19 @@ final class MobileWorkflowTests: XCTestCase {
         XCTAssertEqual(archive.record(for: file, embedded: embedded), embedded)
         XCTAssertEqual(archive.record(for: file, embedded: nil), oldGraph)
     }
+    func testDirectorReadsActiveTimelineAndUsesFallbackOnlyForEmptySegments() throws {
+        let entry = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"1":{"class_type":"LazyVideoSave","inputs":{"video":["2",0]}},
+         "2":{"class_type":"LazyH3Director","inputs":{
+            "start_frame":20,"duration_frames":40,"local_prompts":"outdated first | fallback prompt",
+            "timeline_data":"{\"segments\":[{\"start\":0,\"length\":12,\"prompt\":\"before range\"},{\"start\":20,\"length\":12,\"prompt\":\"first scene\"},{\"start\":32,\"length\":12,\"prompt\":\"\"},{\"start\":44,\"length\":12,\"type\":\"ghost\",\"prompt\":\"placeholder\"},{\"start\":64,\"length\":12,\"prompt\":\"after range\"}]}"
+        }}}
+        """#.utf8))
+        let record = try XCTUnwrap(MediaProvenance.embeddedPrompt(entry))
+        let prompts = ExecutionPrompts(record: record).details().prompts
+        XCTAssertEqual(prompts.map(\.text), ["first scene\n\nfallback prompt"])
+        XCTAssertEqual(prompts.first?.role, .segments)
+    }
     func testGalleryGroupsBatchImagesAndVideosAndSurvivesTaskDeletion() throws {
         var archive = MediaArchive()
         archive.outputs = [

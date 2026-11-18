@@ -320,7 +320,7 @@ struct TaskDetailView: View {
                     }
                 }
             }
-            if workflow == nil {
+            if prompt.object.isEmpty && store.currentMediaArchive.provenance?[promptID] == nil {
                 Section {
                     Text("任务参数暂不可用，可能已被历史记录清理。").foregroundStyle(PocketPalette.secondary)
                 }
@@ -383,7 +383,7 @@ struct GalleryView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .simultaneousGesture(GalleryPageSwipe(enabled: preview == nil && (section == .workflow || folder.isEmpty)) { left in
+                .gesture(GalleryPageSwipe(enabled: preview == nil && (section == .workflow || folder.isEmpty)) { left in
                     if left && section == .workflow {
                         folder = ""
                         section = .files

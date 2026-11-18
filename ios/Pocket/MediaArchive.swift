@@ -124,7 +124,7 @@ struct MediaProvenance: Codable, Equatable {
         var record = MediaProvenance(prompt: submission[2].object, workflowID: meta["workflow_id"].text,
             workflowName: meta["name"].text, taskID: meta["id"].text.nonEmpty ?? id,
             createdAt: meta["created_at"].double > 0 ? meta["created_at"].double : (created > 100_000_000_000 ? created / 1000 : created))
-        if submission.count > 4 { record.requestedOutputs = submission[4].array.map(\.text) }
+        if submission.count > 4, !submission[4].array.isEmpty { record.requestedOutputs = submission[4].array.map(\.text) }
         var producers: [String: [String]] = [:]
         var displayed: [String: String] = [:]
         for (nodeID, result) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {

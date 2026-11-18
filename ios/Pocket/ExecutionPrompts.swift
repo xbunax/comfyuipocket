@@ -71,7 +71,7 @@ struct ExecutionPrompts {
                 return
             }
             let submitted = submitted || Self.rewritesText(type) && sourceNode["inputs"]["goohai_bypass"] != .bool(true)
-            let inputs = activeInputs(sourceNode)
+            let inputs = promptInputs(sourceNode)
             let semantic = inputs.keys.sorted().filter { Self.role($0, type: type) != nil }
             let hasSeparateNegative = semantic.contains { Self.role($0, type: type) == .negative }
             for key in inputs.keys.sorted() {
@@ -90,7 +90,7 @@ struct ExecutionPrompts {
             guard let node = nodes[id] else { return [] }
             let type = node["class_type"].text.lowercased()
             guard !Self.rewritesText(type) else { return [] }
-            return activeInputs(node).sorted { $0.key < $1.key }.compactMap { key, value in
+            return promptInputs(node).sorted { $0.key < $1.key }.compactMap { key, value in
                 Self.role(key, type: type).map { (id, key, $0, value) }
             }
         }
@@ -114,7 +114,8 @@ struct ExecutionPrompts {
     private func outputRoots(for output: OutputImage?) -> [String]? {
         let media = nodes.keys.filter { id in
             let type = nodes[id]?["class_type"].text.lowercased() ?? ""
-            return type.contains("saveimage") || type.contains("savevideo") || type.contains("videocombine") || type == "previewimage"
+            return type.contains("saveimage") || type.contains("savevideo") || type.contains("videocombine")
+                || type == "lazyvideosave" || type == "previewimage"
         }.sorted()
         if let output {
             if let recorded = record.outputNodes?[output.assetID], !recorded.isEmpty { return recorded }
@@ -123,7 +124,9 @@ struct ExecutionPrompts {
                 let prefix = (inputs["filename_prefix"].text.nonEmpty ?? inputs["文件名"].text).replacingOccurrences(of: "\\", with: "/")
                 guard !prefix.isEmpty, !prefix.contains("%") else { return false }
                 let path = output.subfolder.isEmpty ? output.filename : "\(output.subfolder)/\(output.filename)"
-                return path.hasPrefix(prefix + "_") || path.hasPrefix(prefix + ".")
+                if path.hasPrefix(prefix + ".") { return true }
+                guard path.hasPrefix(prefix + "_") else { return false }
+                return path.dropFirst(prefix.count + 1).first?.isNumber == true
             }
             if matching.count == 1 { return matching }
             if media.count > 1 { return [] }
@@ -144,6 +147,7 @@ struct ExecutionPrompts {
         while let id = pending.popLast() {
             guard let node = nodes[id], !Self.isNote(node["class_type"].text.lowercased()),
                   visited.insert(id).inserted else { continue }
+            if node["class_type"].text == "ConditioningZeroOut" { continue }
             for (key, value) in activeInputs(node) where !Self.metadataPorts.contains(key.lowercased()) {
                 if let source = wire(value) { pending.append(source.node) }
             }
@@ -168,6 +172,31 @@ struct ExecutionPrompts {
         let key = on ? "on_true" : "on_false"
         if let value = inputs[key] { return [key: value] }
         return [:]
+    }
+
+    private func promptInputs(_ node: JSONValue) -> [String: JSONValue] {
+        var inputs = activeInputs(node)
+        guard ["LazyH3Director", "WanRemixDirector"].contains(node["class_type"].text),
+              let data = inputs["timeline_data"], case .string(let json) = data,
+              let timeline = try? JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)),
+              !timeline["segments"].array.isEmpty else { return inputs }
+        let start = inputs["start_frame"]?.double ?? 0
+        let duration = inputs["duration_frames"]?.double ?? 0
+        let end = duration > 0 ? start + duration : Double.infinity
+        let segments = timeline["segments"].array.enumerated().filter { _, segment in
+            let position = segment["start"].double
+            return segment["type"].text != "ghost" && !segment.object.isEmpty
+                && position < end && position + max(1, segment["length"].double) > start
+        }.sorted { ($0.element["start"].double, $0.offset) < ($1.element["start"].double, $1.offset) }
+        let fallback = (inputs["local_prompts"]?.text ?? "").split(separator: "|", omittingEmptySubsequences: false)
+        let text: [String] = segments.enumerated().compactMap { index, segment in
+            let original = segment.element["prompt"].text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !original.isEmpty { return original }
+            if fallback.indices.contains(index) { return String(fallback[index]).trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty }
+            return nil
+        }
+        inputs["local_prompts"] = .string(text.joined(separator: "\n\n"))
+        return inputs
     }
 
     private func textFromRun() -> [Wire: String] {

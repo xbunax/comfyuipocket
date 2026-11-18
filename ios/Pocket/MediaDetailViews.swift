@@ -106,8 +106,12 @@ struct ImageDetail: View {
             media.frame(maxWidth: .infinity, maxHeight: .infinity).ignoresSafeArea()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .top) { if chromeVisible { header.transition(.opacity) } }
-        .overlay(alignment: .bottom) { if chromeVisible { controls.transition(.opacity) } }
+        .overlay(alignment: .top) {
+            header.opacity(chromeVisible ? 1 : 0).allowsHitTesting(chromeVisible).accessibilityHidden(!chromeVisible)
+        }
+        .overlay(alignment: .bottom) {
+            controls.opacity(chromeVisible ? 1 : 0).allowsHitTesting(chromeVisible).accessibilityHidden(!chromeVisible)
+        }
         .statusBarHidden(true)
         .persistentSystemOverlays(chromeVisible ? .automatic : .hidden)
         .edgeSwipeBack(enabled: !saving, preferSystem: false) { dismiss() }
@@ -206,7 +210,7 @@ struct ImageDetail: View {
                 Button { Task { await saveToPhotos() } } label: {
                     if saving { ProgressView().frame(width: 44, height: 44) }
                     else { Image(systemName: "arrow.down.to.line").frame(width: 44, height: 44) }
-                }.accessibilityLabel("保存到照片").disabled(file == nil || saving)
+                }.accessibilityLabel("保存到照片").disabled((image == nil && (!output.isVideo || file == nil)) || saving)
                 if let file {
                     ShareLink(item: file) { Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44) }
                         .accessibilityLabel("分享文件")
@@ -345,7 +349,8 @@ private enum ArtworkMetadata {
             let asset = AVURLAsset(url: file)
             guard let items = try? await asset.load(.metadata) else { return nil }
             for item in items {
-                guard item.commonKey == .commonKeyDescription || item.identifier?.rawValue.lowercased().contains("comment") == true,
+                guard item.commonKey == .commonKeyDescription || item.identifier == .iTunesMetadataUserComment
+                        || item.identifier == .quickTimeMetadataComment || item.identifier == .quickTimeUserDataComment,
                       let text = try? await item.load(.stringValue), text.utf8.count <= 20 * 1024 * 1024,
                       let value = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)),
                       let record = MediaProvenance.embeddedPrompt(value["prompt"]) else { continue }
