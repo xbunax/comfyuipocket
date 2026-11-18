@@ -49,6 +49,19 @@ test('asset drag recognizes Lazy reference panels and the H3 timeline with the n
     assert.throws(() => dropReferenceAsset(app, source, hit, {...image, media_kind: 'video'}, 20, 30), /只接收图片/);
     assert.equal(dropReferenceAsset(app, source, { closest: () => zone }, image, 20, 30), null);
 
+    for (const [type, name] of [['LazyQwenWorkbench', 'lazy_qwen_wb'], ['LazyKreaWorkbench', 'lazy_krea_wb']]) {
+      source.comfyClass = type;
+      source.widgets[0].name = name;
+      widget.value = '[]';
+      zone.dispatchEvent = event => {
+        const uri = new URL(event.dataTransfer.get('text/uri-list'), 'http://localhost');
+        widget.value = JSON.stringify([decodeURIComponent(uri.searchParams.get('filename'))]);
+        return false;
+      };
+      assert.equal(dropReferenceAsset(app, source, hit, {...image, filename: '50%.png'}, 20, 30), 'reference-added');
+      assert.deepEqual(JSON.parse(widget.value), ['50%.png']);
+    }
+
     source.comfyClass = 'LazyH3Director';
     hit.closest = selector => selector === '.pr-canvas' ? zone : null;
     const events = [];

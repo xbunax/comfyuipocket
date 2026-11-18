@@ -27,6 +27,7 @@ struct CanvasAssetSidebar: View {
         case output = "输出", input = "输入", recent = "最近"
         var id: String { rawValue }
     }
+    let horizontal: Bool
     let close: () -> Void
     let message: String?
     let importing: Bool
@@ -40,16 +41,14 @@ struct CanvasAssetSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("资产").font(.subheadline.weight(.semibold))
-                Spacer()
+                if horizontal { sourcePicker }
+                else { Spacer() }
                 Button(action: close) { Image(systemName: "xmark").frame(width: 32, height: 32) }
-                    .buttonStyle(.plain).accessibilityLabel("关闭资产侧栏")
+                    .buttonStyle(.plain).accessibilityLabel("关闭资产面板")
             }
-            Picker("资产来源", selection: $source) {
-                ForEach(Source.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented)
-                .onChange(of: source) { _, _ in folder = "" }
+            if !horizontal { sourcePicker }
             if !folder.isEmpty, source != .recent {
                 Button {
                     folder = folder.split(separator: "/").dropLast().joined(separator: "/")
@@ -58,55 +57,81 @@ struct CanvasAssetSidebar: View {
                         .lineLimit(1)
                 }.font(.caption).accessibilityHint("返回上一级文件夹")
             }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if source == .recent {
-                        if store.images.isEmpty { Text("还没有最近作品").font(.caption) }
-                        ForEach(store.images) { assetRow($0) }
-                    } else {
-                        ForEach(entries) { entry in
-                            if entry.isFolder {
-                                Button { folder = entry.path } label: {
-                                    Label(entry.name, systemImage: "folder")
-                                        .font(.caption).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.vertical, 6).contentShape(Rectangle())
-                                }.buttonStyle(.plain)
-                            } else {
-                                assetRow(entry.asset(type: source == .input ? "input" : "output"))
-                            }
-                        }
-                        if loading { ProgressView().controlSize(.small) }
-                        else if let failure {
-                            Text(failure).font(.caption).foregroundStyle(PocketPalette.secondary)
-                            Button("重试") { Task { await load(offset: next ?? 0) } }.font(.caption)
-                        } else if let next {
-                            Button("加载更多") { Task { await load(offset: next) } }.font(.caption)
-                        } else if entries.isEmpty {
-                            Text("此文件夹暂无图片或视频").font(.caption).foregroundStyle(PocketPalette.secondary)
-                        }
-                    }
+            if horizontal {
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .center, spacing: 8) { assetTiles }
                 }
-            }.refreshable { if source != .recent { await load() } }
+                .scrollIndicators(.hidden)
+                .frame(height: 96)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) { assetTiles }
+                }
+                .refreshable { if source != .recent { await load() } }
+            }
             if importing {
                 ProgressView("正在导入…").font(.caption).controlSize(.small)
             } else {
-                Text(message ?? "拖到兼容的加载节点，或将图片拖到节点的参考图区。")
+                Text(message ?? (horizontal ? "长按素材，向下拖入画布。" : "拖到兼容的加载节点，或将图片拖到节点的参考图区。"))
                     .font(.caption2).foregroundStyle(PocketPalette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 10).padding(.bottom, 10).padding(.top, 4)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: horizontal ? .infinity : nil, maxHeight: horizontal ? nil : .infinity, alignment: .topLeading)
         .task(id: "\(store.client?.serverID ?? "")/\(source.id)/\(folder)/\(store.outputDirectoryRevision)/\(store.pluginCapabilities.sorted())") { await load() }
+    }
+
+    private var sourcePicker: some View {
+        Picker("资产来源", selection: $source) {
+            ForEach(Source.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: source) { _, _ in folder = "" }
+    }
+
+    @ViewBuilder private var assetTiles: some View {
+        if source == .recent {
+            if store.images.isEmpty { Text("还没有最近作品").font(.caption) }
+            ForEach(store.images) { assetRow($0) }
+        } else {
+            ForEach(entries) { entry in
+                if entry.isFolder {
+                    Button { folder = entry.path } label: {
+                        Label(entry.name, systemImage: "folder")
+                            .font(.caption).lineLimit(2)
+                            .frame(maxWidth: horizontal ? nil : .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                            .frame(width: horizontal ? 108 : nil, height: horizontal ? 88 : nil, alignment: .center)
+                            .background(horizontal ? PocketPalette.background : Color.clear, in: .rect(cornerRadius: 9))
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain)
+                } else {
+                    assetRow(entry.asset(type: source == .input ? "input" : "output"))
+                }
+            }
+            if loading { ProgressView().controlSize(.small) }
+            else if let failure {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(failure).foregroundStyle(PocketPalette.secondary)
+                    Button("重试") { Task { await load(offset: next ?? 0) } }
+                }.font(.caption)
+            } else if let next {
+                Button("加载更多") { Task { await load(offset: next) } }.font(.caption)
+            } else if entries.isEmpty {
+                Text("此文件夹暂无图片或视频").font(.caption).foregroundStyle(PocketPalette.secondary)
+            }
+        }
     }
 
     private func assetRow(_ asset: OutputImage) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            RemoteImage(output: asset, fill: true).frame(height: 76).clipShape(.rect(cornerRadius: 7))
+            RemoteImage(output: asset, fill: true).frame(height: horizontal ? 59 : 76).clipShape(.rect(cornerRadius: 7))
             Text(asset.filename).font(.caption2).lineLimit(2).truncationMode(.middle)
                 .foregroundStyle(PocketPalette.text)
         }
-        .padding(4).background(PocketPalette.background, in: .rect(cornerRadius: 9))
+        .padding(4).frame(width: horizontal ? 112 : nil)
+        .background(PocketPalette.background, in: .rect(cornerRadius: 9))
         .contentShape(Rectangle())
         .onDrag { CanvasAssetDrag(serverID: store.client?.serverID ?? "", asset: asset).provider() }
         .accessibilityElement(children: .combine)

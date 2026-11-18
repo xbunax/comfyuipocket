@@ -308,14 +308,21 @@
     if (!timeline && asset.media_kind !== "image") throw new Error("这个参考图区只接收图片。");
     const transfer = new DataTransfer();
     transfer.setData("application/x-comfy-asset-info", JSON.stringify(asset));
+    if (media || timeline) {
+      // Older Qwen and Krea workbenches read a view URL and decode its
+      // filename twice. Preserve literal percent signs for those parsers.
+      const legacy = domName === "lazy_qwen_wb" || domName === "lazy_krea_wb";
+      const path = value => legacy ? value.replaceAll("%", "%25") : value;
+      transfer.setData("text/uri-list", "/view?" + new URLSearchParams({
+        filename: path(asset.filename), subfolder: path(asset.subfolder), type: asset.type
+      }));
+    }
     const event = type => new DragEvent(type, {
       dataTransfer: transfer, bubbles: true, cancelable: true, clientX, clientY
     });
     if (timeline) {
       // The director uses the /view URI to recover the original asset and
       // the native dragover handler to select its timeline position.
-      const { filename, subfolder, type } = asset;
-      transfer.setData("text/uri-list", "/view?" + new URLSearchParams({ filename, subfolder, type }));
       zone.dispatchEvent(event("dragover"));
     }
     const drop = () => zone.dispatchEvent(event("drop"));

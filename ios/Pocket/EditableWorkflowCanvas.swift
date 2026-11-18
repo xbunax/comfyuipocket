@@ -62,6 +62,7 @@ struct WorkflowCanvasView: View {
     @State private var exporting = false
     @State private var exportDocument = WorkflowDocument(data: Data())
     private var workflow: Workflow? { store.workflows.first { $0.id == workflowID } }
+    private var usesAssetSidebar: Bool { UIDevice.current.userInterfaceIdiom == .pad || layout.usesColumns }
     private var canRun: Bool {
         session.loaded && !session.mutating && !submitting && !store.busy && store.connected &&
             !store.restoringConnection && store.connectionRecoveryError == nil
@@ -72,36 +73,21 @@ struct WorkflowCanvasView: View {
             Group {
                 if store.connected, let api = store.client, let workflow {
                     HStack(spacing: 0) {
-                    ZStack {
-                        CanvasWebView(session: session)
-                            .allowsHitTesting(session.loaded)
-                            .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
-                            .onDrop(of: [.pocketCanvasAsset], isTargeted: $targetedForAsset, perform: receiveAsset)
-                            .overlay {
-                                if targetedForAsset {
-                                    Rectangle().strokeBorder(PocketPalette.accent, lineWidth: 2).allowsHitTesting(false)
-                                }
+                        VStack(spacing: 0) {
+                            if showAssets && !usesAssetSidebar && !session.textEditing {
+                                assetPanel(horizontal: true).padding(.horizontal, 8).padding(.bottom, 5)
                             }
-                            .task(id: canvasSize) {
-                                do { try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation() }
-                                catch { return }
-                                await session.refitViewport(size: canvasSize)
-                            }
-                        if session.loading {
-                            ProgressView(session.loadingMessage).padding(20).background(PocketPalette.surface, in: .rect(cornerRadius: 18))
+                            canvasSurface
                         }
-                    }
-                    .safeAreaInset(edge: .bottom, spacing: 0) { controls }
-                    if showAssets && !session.textEditing {
-                        CanvasAssetSidebar(close: { showAssets = false }, message: assetMessage, importing: importingAsset)
-                            .frame(width: layout.usesColumns ? 244 : min(170, max(112, layout.width * 0.42)))
-                            .pocketGlassPanel()
-                            .padding(.vertical, 5).padding(.trailing, 5)
-                    } else if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
-                        CanvasNodeNavigator(session: session, openBookmarks: { showBookmarks = true })
-                            .frame(width: 264).pocketGlassPanel()
-                            .padding(.vertical, 8).padding(.horizontal, 12)
-                    }
+                        if showAssets && usesAssetSidebar && !session.textEditing {
+                            assetPanel(horizontal: false)
+                                .frame(width: layout.usesColumns ? 244 : min(170, max(112, layout.width * 0.42)))
+                                .padding(.vertical, 5).padding(.trailing, 5)
+                        } else if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
+                            CanvasNodeNavigator(session: session, openBookmarks: { showBookmarks = true })
+                                .frame(width: 264).pocketGlassPanel()
+                                .padding(.vertical, 8).padding(.horizontal, 12)
+                        }
                     }
                     .background(PocketPalette.background)
                     .task(id: api.baseURL) {
@@ -220,6 +206,32 @@ struct WorkflowCanvasView: View {
             }
         }
     }
+    private var canvasSurface: some View {
+        ZStack {
+            CanvasWebView(session: session)
+                .allowsHitTesting(session.loaded)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
+                .onDrop(of: [.pocketCanvasAsset], isTargeted: $targetedForAsset, perform: receiveAsset)
+                .overlay {
+                    if targetedForAsset {
+                        Rectangle().strokeBorder(PocketPalette.accent, lineWidth: 2).allowsHitTesting(false)
+                    }
+                }
+                .task(id: canvasSize) {
+                    do { try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation() }
+                    catch { return }
+                    await session.refitViewport(size: canvasSize)
+                }
+            if session.loading {
+                ProgressView(session.loadingMessage).padding(20).background(PocketPalette.surface, in: .rect(cornerRadius: 18))
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { controls }
+    }
+    private func assetPanel(horizontal: Bool) -> some View {
+        CanvasAssetSidebar(horizontal: horizontal, close: { showAssets = false }, message: assetMessage, importing: importingAsset)
+            .pocketGlassPanel()
+    }
     private func finish() { if let onFinish { onFinish() } else { dismiss() } }
     private var canvasMenu: some View {
                     Menu {
@@ -290,7 +302,7 @@ struct WorkflowCanvasView: View {
                         .disabled(submitting || working)
                     Button { showAssets.toggle() } label: { headerIcon("photo.on.rectangle.angled", prominent: showAssets) }
                         .buttonStyle(.plain).disabled(!session.loaded || session.textEditing)
-                        .accessibilityLabel(showAssets ? "关闭资产侧栏" : "打开资产侧栏")
+                        .accessibilityLabel(showAssets ? "关闭资产面板" : "打开资产面板")
                         .accessibilityIdentifier("canvas.assets")
                     canvasMenu
                     Button { Task { await run() } } label: {
