@@ -210,6 +210,9 @@ private struct CanvasAssetTileInput: UIViewRepresentable {
         button.accessibilityHint = "轻点后选取目标节点，也可按住拖入画布"
         button.accessibilityTraits = selected ? [.button, .selected] : .button
     }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
 
     final class Coordinator: NSObject, UIDragInteractionDelegate {
         var parent: CanvasAssetTileInput
@@ -241,6 +244,9 @@ struct CanvasAssetTarget: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: UIView, context: Context) { context.coordinator.parent = self }
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
 
     final class Coordinator: NSObject, UIDropInteractionDelegate {
         var parent: CanvasAssetTarget
