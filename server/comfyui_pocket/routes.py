@@ -7,7 +7,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .catalog import Catalog, MAX_BYTES, VERSION
-from .media import delete_media, list_output
+from .media import delete_media, import_media, list_output
 
 
 def same_origin(request):
@@ -65,15 +65,17 @@ def register_routes():
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort", "iroh-pairing"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort", "canvas-assets", "iroh-pairing"]})
 
     @routes.get("/pocket/v1/outputs")
+    @routes.get("/pocket/v1/inputs")
     async def outputs(request):
         import folder_paths
 
         catalog_for(request)
         try:
-            result = await asyncio.to_thread(list_output, folder_paths.get_output_directory(),
+            directory = folder_paths.get_input_directory() if request.path.endswith("/inputs") else folder_paths.get_output_directory()
+            result = await asyncio.to_thread(list_output, directory,
                                             request.query.get("folder", ""),
                                             int(request.query.get("offset", "0")),
                                             int(request.query.get("limit", "60")),
@@ -81,9 +83,29 @@ def register_routes():
         except ValueError as exc:
             raise web.HTTPBadRequest(text=str(exc)) from exc
         except FileNotFoundError as exc:
-            raise web.HTTPNotFound(text="Output folder not found") from exc
+            raise web.HTTPNotFound(text="Media folder not found") from exc
         except OSError as exc:
-            raise web.HTTPForbidden(text="Output folder is not accessible") from exc
+            raise web.HTTPForbidden(text="Media folder is not accessible") from exc
+        return web.json_response(result)
+
+    @routes.post("/pocket/v1/media/import")
+    async def add_input_media(request):
+        import folder_paths
+
+        same_origin(request)
+        catalog_for(request)
+        data = await read_json(request)
+        try:
+            result = await asyncio.to_thread(import_media, data, {
+                "input": folder_paths.get_input_directory(), "output": folder_paths.get_output_directory(),
+                "temp": folder_paths.get_temp_directory()
+            })
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text="Media file not found") from exc
+        except OSError as exc:
+            raise web.HTTPConflict(text="Unable to copy this media file") from exc
         return web.json_response(result)
 
     @routes.post("/pocket/v1/media/delete")

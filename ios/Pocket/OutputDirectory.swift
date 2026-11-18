@@ -17,6 +17,9 @@ struct OutputDirectoryEntry: Codable, Equatable, Identifiable {
     var id: String { path }
     var isFolder: Bool { kind == "folder" }
     var output: OutputImage {
-        OutputImage(promptID: "output-file:\(path):\(modified):\(size)", filename: name, subfolder: subfolder, type: "output")
+        asset(type: "output")
+    }
+    func asset(type: String) -> OutputImage {
+        OutputImage(promptID: "\(type)-file:\(path):\(modified):\(size)", filename: name, subfolder: subfolder, type: type)
     }
 }

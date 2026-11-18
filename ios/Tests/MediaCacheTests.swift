@@ -70,9 +70,9 @@ final class MediaCacheTests: XCTestCase {
         }
         let requests = await counter.value; XCTAssertEqual(requests, 3)
     }
-    func testExpiredDataReloadsAndDiskBudgetIsBounded() async throws {
+    func testExplicitExpirationAndManualClear() async throws {
         let folder = directory(); defer { try? FileManager.default.removeItem(at: folder) }
-        let cache = MediaCache(directory: folder, memoryLimit: 0, diskLimit: 64)
+        let cache = MediaCache(directory: folder, memoryLimit: 0)
         let key = MediaCacheKey(resource: "image", variant: "raw")
         _ = try await cache.data(for: key) { Data([1]) }
         let value = try await cache.data(for: key, lifetime: 0) { Data([2]) }
@@ -80,16 +80,35 @@ final class MediaCacheTests: XCTestCase {
         for index in 0..<4 {
             _ = try await cache.data(for: MediaCacheKey(resource: "image-\(index)", variant: "raw")) { Data(repeating: 7, count: 24) }
         }
-        XCTAssertLessThanOrEqual(try diskUsage(folder), 64)
+        let diskUsage = await cache.diskUsage()
+        XCTAssertEqual(diskUsage, 137)
+        await cache.clear()
+        let remaining = await cache.diskUsage()
+        XCTAssertEqual(remaining, 0)
+        let refreshed = try await cache.data(for: key) { Data([3]) }
+        XCTAssertEqual(refreshed, Data([3]))
     }
-    private func diskUsage(_ folder: URL) throws -> Int {
-        var size = 0
-        if let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
-            for case let file as URL in files {
-                let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-                if values.isRegularFile == true { size += values.fileSize ?? 0 }
-            }
+    func testVideoFilePersistsAcrossPreviewsUntilManualClear() async throws {
+        let folder = directory(); defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let cache = MediaCache(directory: folder.appendingPathComponent("cache", isDirectory: true))
+        let key = MediaCacheKey(resource: "video", variant: "file")
+        let download = folder.appendingPathComponent("download")
+        let first = folder.appendingPathComponent("first")
+        let second = folder.appendingPathComponent("second")
+        let expected = Data([1, 2, 3])
+        try await cache.materializeFile(for: key, destination: first) {
+            try expected.write(to: download)
+            return download
         }
-        return size
+        try FileManager.default.removeItem(at: first)
+        try await cache.materializeFile(for: key, destination: second) {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        XCTAssertEqual(try Data(contentsOf: second), expected)
+        await cache.clear()
+        let remaining = await cache.diskUsage()
+        XCTAssertEqual(remaining, 0)
+        XCTAssertEqual(try Data(contentsOf: second), expected)
     }
 }

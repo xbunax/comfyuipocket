@@ -40,10 +40,13 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         folder_paths = types.ModuleType("folder_paths")
         folder_paths.get_public_user_directory = lambda user: str(root / user)
         folder_paths.get_output_directory = lambda: str(root / "output")
+        folder_paths.get_input_directory = lambda: str(root / "input")
         folder_paths.get_temp_directory = lambda: str(root / "temp")
         folder_paths.get_user_directory = lambda: str(root)
         self.media_root = root / "output"
         self.media_root.mkdir()
+        self.input_root = root / "input"
+        self.input_root.mkdir()
         sys.modules["folder_paths"] = folder_paths
 
         def restore_folder_paths():
@@ -106,6 +109,32 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty["entries"], [])
         info = await (await self.client.get("/pocket/v1/info")).json()
         self.assertIn("output-browser", info["capabilities"])
+
+    async def test_canvas_media_import_reuses_inputs_and_copies_output_once(self):
+        nested = self.input_root / "参考"
+        nested.mkdir()
+        (nested / "原图.png").write_bytes(b"reference")
+        (self.media_root / "clip.mp4").write_bytes(b"video")
+        response = await self.client.get("/pocket/v1/inputs", params={"folder": "参考"})
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["entries"][0]["path"], "参考/原图.png")
+
+        endpoint = "/pocket/v1/media/import"
+        response = await self.client.post(endpoint, json={"type": "input", "subfolder": "参考", "filename": "原图.png"})
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["value"], "参考/原图.png")
+        output = {"type": "output", "subfolder": "", "filename": "clip.mp4"}
+        response = await self.client.post(endpoint, json=output)
+        self.assertEqual(response.status, 200)
+        imported = (await response.json())["value"]
+        self.assertEqual((self.input_root / imported).read_bytes(), b"video")
+        self.assertTrue((self.media_root / "clip.mp4").is_file())
+        response = await self.client.post(endpoint, json=output)
+        self.assertEqual((await response.json())["value"], imported)
+        self.assertEqual(list(self.input_root.glob("*.mp4")), [self.input_root / imported])
+        self.assertEqual((await self.client.post(endpoint, json={**output, "subfolder": ".."})).status, 400)
+        self.assertEqual((await self.client.post(endpoint, json=output, headers={"Origin": "https://other.example"})).status, 403)
+        self.assertEqual((await self.client.post(endpoint, json=output, headers={"comfy-user": "unknown"})).status, 403)
 
     async def test_pairing_is_opt_in_and_control_routes_reject_foreign_origins(self):
         status = await (await self.client.get("/pocket/v1/pairing")).json()

@@ -15,6 +15,11 @@
   <key>NSPhotoLibraryAddUsageDescription</key><string>将生成的图片保存到照片图库。</string>
   <key>NSCameraUsageDescription</key><string>扫描你自己电脑上的 ComfyUI Pocket 配对二维码。</string>
   <key>NSSupportsLiveActivities</key><true/>
+  <key>UTExportedTypeDeclarations</key><array><dict>
+    <key>UTTypeIdentifier</key><string>com.xbunax.comfyuipocket.canvas-asset</string>
+    <key>UTTypeDescription</key><string>Pocket Canvas Asset</string>
+    <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+  </dict></array>
   <key>BGTaskSchedulerPermittedIdentifiers</key><array><string>$(PRODUCT_BUNDLE_IDENTIFIER).generation.*</string></array>
   <key>UIBackgroundModes</key><array><string>processing</string></array>
   <key>CFBundleURLTypes</key><array><dict>

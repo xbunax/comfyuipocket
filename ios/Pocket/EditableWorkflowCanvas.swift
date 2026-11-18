@@ -49,6 +49,10 @@ struct WorkflowCanvasView: View {
     @State private var showNodes = false
     @State private var showPorts = false
     @State private var showBookmarks = false
+    @State private var showAssets = false
+    @State private var importingAsset = false
+    @State private var targetedForAsset = false
+    @State private var assetMessage: String?
     @State private var showSettings = false
     @State private var working = false
     @State private var exporting = false
@@ -64,6 +68,12 @@ struct WorkflowCanvasView: View {
                         CanvasWebView(session: session)
                             .allowsHitTesting(session.loaded)
                             .onGeometryChange(for: CGSize.self) { $0.size } action: { canvasSize = $0 }
+                            .onDrop(of: [.pocketCanvasAsset], isTargeted: $targetedForAsset, perform: receiveAsset)
+                            .overlay {
+                                if targetedForAsset {
+                                    Rectangle().strokeBorder(PocketPalette.accent, lineWidth: 2).allowsHitTesting(false)
+                                }
+                            }
                             .task(id: canvasSize) {
                                 do { try await Task.sleep(for: .milliseconds(150)); try Task.checkCancellation() }
                                 catch { return }
@@ -74,7 +84,12 @@ struct WorkflowCanvasView: View {
                         }
                     }
                     .safeAreaInset(edge: .bottom, spacing: 0) { controls }
-                    if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
+                    if showAssets && !session.textEditing {
+                        CanvasAssetSidebar(close: { showAssets = false }, message: assetMessage, importing: importingAsset)
+                            .frame(width: layout.usesColumns ? 244 : min(170, max(112, layout.width * 0.42)))
+                            .pocketGlassPanel()
+                            .padding(.vertical, 5).padding(.trailing, 5)
+                    } else if layout.showsCanvasInspector && inspectorVisible && !session.textEditing {
                         CanvasNodeNavigator(session: session, openBookmarks: { showBookmarks = true })
                             .frame(width: 264).pocketGlassPanel()
                             .padding(.vertical, 8).padding(.horizontal, 12)
@@ -259,6 +274,10 @@ struct WorkflowCanvasView: View {
                         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("切换工作流")
                         .disabled(submitting || working)
+                    Button { showAssets.toggle() } label: { headerIcon("photo.on.rectangle.angled", prominent: showAssets) }
+                        .buttonStyle(.plain).disabled(!session.loaded || session.textEditing)
+                        .accessibilityLabel(showAssets ? "关闭资产侧栏" : "打开资产侧栏")
+                        .accessibilityIdentifier("canvas.assets")
                     canvasMenu
                     Button { Task { await run() } } label: {
                         if submitting { ProgressView().controlSize(.small).frame(width: 44, height: 44) }
@@ -396,6 +415,51 @@ struct WorkflowCanvasView: View {
             .accessibilityLabel(title).disabled(!session.available)
     }
     private func command(_ name: String) { Task { await session.action("command", arguments: ["name": name]) } }
+    private func receiveAsset(_ items: [NSItemProvider], _ point: CGPoint) -> Bool {
+        guard !importingAsset, !working, !submitting, session.loaded, !session.mutating, !session.textEditing,
+              canvasSize.width > 0, canvasSize.height > 0,
+              let provider = items.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.pocketCanvasAsset.identifier) })
+        else { return false }
+        let x = point.x / canvasSize.width, y = point.y / canvasSize.height
+        importingAsset = true
+        session.mutating = true
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.pocketCanvasAsset.identifier) { data, failure in
+            Task { @MainActor in
+                defer { importingAsset = false; session.mutating = false }
+                do {
+                    if let failure { throw failure }
+                    guard let data, data.count <= 16384, let api = store.client, store.canvasEditingSession === session
+                    else { throw PocketError.message("资产或画布已不可用。") }
+                    let drag = try JSONDecoder().decode(CanvasAssetDrag.self, from: data)
+                    guard drag.serverID == api.serverID else { throw PocketError.message("请在同一服务器的画布中导入资产。") }
+                    let asset = drag.asset, token = UUID().uuidString
+                    let target = try await session.call("prepareAsset", arguments: ["x": x, "y": y, "token": token, "asset": [
+                        "filename": asset.filename, "subfolder": asset.subfolder, "type": asset.type,
+                        "media_kind": asset.isVideo ? "video" : "image"
+                    ]]) as? String
+                    if target == "reference" {
+                        assetMessage = "已交给参考图区处理"
+                    } else if target == "input" {
+                        guard store.pluginCapabilities.contains("canvas-assets") else {
+                            throw PocketError.message("更新电脑端 Pocket 插件后可导入。")
+                        }
+                        let value = try await api.importAsset(asset)
+                        guard store.client === api, store.canvasEditingSession === session else {
+                            throw PocketError.message("画布已切换，请重新拖放。")
+                        }
+                        _ = try await session.call("importAsset", arguments: ["token": token, "value": value])
+                        await session.refreshScene()
+                        assetMessage = "已导入 \(asset.filename)"
+                        session.mutating = false
+                        _ = await save()
+                    }
+                } catch {
+                    assetMessage = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription
+                }
+            }
+        }
+        return true
+    }
     @discardableResult private func save() async -> Bool {
         guard !working, !session.mutating else { return false }
         working = true; defer { working = false }
@@ -497,6 +561,8 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard let webView else { throw PocketError.message("画布尚未启动。") }
         let scripts: [String: String] = [
             "scene": "return window.PocketCanvas.scene();",
+            "prepareAsset": "return window.PocketCanvas.prepareAsset(x, y, asset, token);",
+            "importAsset": "return await window.PocketCanvas.importAsset(token, value);",
             "overviewPreference": "return window.PocketCanvas.overviewPreference(enabled);",
             "nodeAppearance": "return window.PocketCanvas.nodeAppearance(enabled, palette);",
             "stepParameter": "return await window.PocketCanvas.stepParameter(id, type, name, direction, path);",

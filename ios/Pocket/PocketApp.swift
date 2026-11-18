@@ -141,6 +141,8 @@ struct SyncBadge: View {
 struct ConnectionView: View {
     @Environment(PocketStore.self) private var store
     @State private var pairingCode = ""
+    @State private var cacheSize: Int64?
+    @State private var confirmCacheClear = false
     var body: some View {
         @Bindable var store = store
         NavigationStack {
@@ -192,18 +194,38 @@ struct ConnectionView: View {
                 Section("偏好设置") {
                     NavigationLink { AppSettingsView() } label: { Label("设置", systemImage: "gearshape") }
                 }
-                Section("图片缓存") {
-                    Text("自动复用图片和视频首帧预览，内存上限 32 MB，磁盘上限 256 MB。")
-                        .font(.footnote).foregroundStyle(PocketPalette.secondary)
-                    Button("清理图片缓存", systemImage: "arrow.clockwise") {
-                        Task { await MediaCache.shared.clear(); store.notice = "图片缓存已清理。" }
+                Section {
+                    LabeledContent("占用空间") {
+                        if let cacheSize {
+                            Text(cacheSize.formatted(.byteCount(style: .file))).monospacedDigit()
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
                     }
+                    Button("清理文件缓存", systemImage: "trash", role: .destructive) { confirmCacheClear = true }
+                        .disabled(cacheSize == nil || cacheSize == 0)
+                } header: {
+                    Text("文件缓存")
+                } footer: {
+                    Text("图片、视频和缩略图的本地缓存不限大小，可手动清理。")
                 }
             }
             .pocketListSurface()
             .frame(maxWidth: 760).frame(maxWidth: .infinity).background(PocketBackground())
             .navigationTitle("连接")
             .navigationBarTitleDisplayMode(.inline)
+            .task { cacheSize = await MediaCache.shared.diskUsage() }
+            .confirmationDialog("清理本地文件缓存？", isPresented: $confirmCacheClear, titleVisibility: .visible) {
+                Button("清理缓存", role: .destructive) {
+                    Task {
+                        await MediaCache.shared.clear()
+                        cacheSize = await MediaCache.shared.diskUsage()
+                        store.notice = "文件缓存已清理。"
+                    }
+                }
+            } message: {
+                Text("下次打开媒体时会按需重新下载。")
+            }
             .task(id: store.incomingPairingCode) {
                 if let code = store.incomingPairingCode {
                     pairingCode = code; store.incomingPairingCode = nil

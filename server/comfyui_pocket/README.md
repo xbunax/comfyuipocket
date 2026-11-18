@@ -41,6 +41,11 @@ media. Listing does not depend on task history, scan subdirectories recursively,
 or follow symbolic links / Windows junctions. User access is checked before listing.
 Update the plugin and restart ComfyUI to enable the phone's Historical Output tab.
 
+Version 0.11.0 adds the canvas asset sidebar. GET /pocket/v1/inputs lists
+the input directory, and POST /pocket/v1/media/import prepares selected
+media for a loader node. Existing inputs are reused. Outputs are copied
+to a stable filename in the input directory while leaving the original in place.
+
 Catalog entries include `updatedAt` (milliseconds). The plugin respects ComfyUI's
 `comfy-user` storage routing. Bounded JSON, atomic writes, stable 32-hex identifiers,
 and origin validation prevent path traversal, partial files and browser cross-origin

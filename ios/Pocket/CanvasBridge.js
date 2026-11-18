@@ -232,7 +232,7 @@
     return { nodes, groups, links, nested: graph !== app.rootGraph, ...bookmarkLocations(app) };
   }
 
-  async function setMobileWidget(app, id, index, value, name) {
+  async function setMobileWidget(app, id, index, value, name, importingFile = false) {
     const node = nodeAt(app.canvas.graph ?? app.rootGraph, id);
     const widget = name ? node?.widgets?.find(w => w.name === name) : node?.widgets?.[Number(index)];
     if (!widget || !["string", "number", "boolean"].includes(typeof value) || typeof widget.value !== typeof value) throw new Error("控件类型已改变，请重新打开节点。");
@@ -240,7 +240,15 @@
     if (typeof value === "number" && (!Number.isFinite(value) || value < (widget.options?.min ?? -Infinity) || value > (widget.options?.max ?? Infinity))) throw new Error("数值超出节点范围。");
     let choices = widget.options?.values;
     if (typeof choices === "function") choices = choices(widget, node);
-    if (Array.isArray(choices) && !choices.includes(value)) throw new Error("此选项已不可用，请刷新节点。");
+    if (Array.isArray(choices) && !choices.includes(value)) {
+      if (!importingFile) throw new Error("此选项已不可用，请刷新节点。");
+      if (typeof widget.options.values === "function") {
+        const original = widget.options.values;
+        widget.options.values = (...args) => [...new Set([...original.apply(widget.options, args), value])];
+      } else {
+        widget.options.values = [...choices, value];
+      }
+    }
     const graph = app.canvas.graph ?? app.rootGraph;
     const tracker = app.extensionManager?.workflow?.activeWorkflow?.changeTracker;
     tracker?.captureCanvasState?.(); graph.beforeChange?.();
@@ -252,6 +260,23 @@
     } catch (error) { widget.value = old; throw error; }
     finally { graph.afterChange?.(); tracker?.captureCanvasState?.(); app.canvas.setDirty(true, true); }
     return true;
+  }
+
+  function assetInputWidget(node, kind, preferred) {
+    if (!node || !["image", "video"].includes(kind)) return null;
+    const native = {
+      LoadImage: ["image", "image"], LoadImageMask: ["image", "image"],
+      LoadVideo: ["video", "file"], VHS_LoadVideo: ["video", "video"],
+      VHS_LoadVideoFFmpeg: ["video", "video"]
+    }[node.comfyClass ?? node.type];
+    const inputs = node.constructor?.nodeData?.input;
+    const eligible = (node.widgets ?? []).filter(widget => {
+      if (typeof widget.value !== "string" || widget.hidden || widget.disabled ||
+          node.inputs?.some(i => i.link != null && i.widget?.name === widget.name)) return false;
+      const definition = inputs?.required?.[widget.name] ?? inputs?.optional?.[widget.name];
+      return definition?.[1]?.[kind + "_upload"] === true || (native?.[0] === kind && native[1] === widget.name);
+    });
+    return eligible.includes(preferred) ? preferred : eligible.length === 1 ? eligible[0] : null;
   }
 
   function moveMobileNode(app, id, x, y) {
@@ -376,7 +401,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
+    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -387,6 +412,7 @@
   let initialPrompt = null;
   let textEditor;
   let ownedGraphID, overviewGraph, overviewScale;
+  let pendingAsset;
   let tapToFocus = false;
   let updateMap = () => {};
   function installMiniMap() {
@@ -612,6 +638,43 @@
     delete: "Comfy.Canvas.DeleteSelectedItems"
   };
   window.PocketCanvas = {
+    prepareAsset(x, y, asset, token) {
+      pendingAsset = undefined;
+      if (!loaded || app.rootGraph.id !== ownedGraphID || textEditor?.busy) throw new Error("请先完成当前编辑。");
+      const canvas = app.canvas, visual = window.visualViewport;
+      const clientX = (visual?.offsetLeft ?? 0) + x * (visual?.width ?? window.innerWidth);
+      const clientY = (visual?.offsetTop ?? 0) + y * (visual?.height ?? window.innerHeight);
+      const graph = canvas.graph;
+      const bounds = canvas.canvas.getBoundingClientRect();
+      if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom)
+        throw new Error("请把资产拖到画布中的文件节点。");
+      if (asset.media_kind === "image") {
+        const zone = document.elementFromPoint(clientX, clientY)?.closest(".bp-dropzone");
+        if (zone && app.canvasContainer?.contains(zone)) {
+          const transfer = new DataTransfer();
+          transfer.setData("application/x-comfy-asset-info", JSON.stringify(asset));
+          zone.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true, clientX, clientY }));
+          return "reference";
+        }
+      }
+      const point = canvas.convertEventToCanvasOffset({ clientX, clientY });
+      const node = graph.getNodeOnPos(...point);
+      const widget = assetInputWidget(node, asset.media_kind, node?.getWidgetOnPos?.(...point));
+      if (!widget) throw new Error("请拖到接收此类文件的加载节点或参考图区。");
+      pendingAsset = { token, graph, node, widget, kind: asset.media_kind };
+      return "input";
+    },
+    async importAsset(token, value) {
+      const target = pendingAsset;
+      if (target?.token !== token) throw new Error("导入目标已改变。");
+      pendingAsset = undefined;
+      if (!loaded || app.rootGraph.id !== ownedGraphID || app.canvas.graph !== target.graph ||
+          nodeAt(target.graph, target.node.id) !== target.node || textEditor?.busy ||
+          assetInputWidget(target.node, target.kind, target.widget) !== target.widget) {
+        throw new Error("节点或文件控件已改变，请重新拖放。");
+      }
+      return await setMobileWidget(app, target.node.id, 0, value, target.widget.name, true);
+    },
     overviewPreference(enabled) { tapToFocus = !!enabled; return true; },
     nodeAppearance(enabled, palette) { return setNodeAppearance(app?.canvas, enabled, palette); },
     async load(text) {

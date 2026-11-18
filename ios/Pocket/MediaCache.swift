@@ -22,12 +22,11 @@ actor MediaCache {
     private var epoch = 0
     private let directory: URL
     private let memoryLimit: Int
-    private let diskLimit: Int
-    init(directory: URL, memoryLimit: Int = 32 * 1024 * 1024, diskLimit: Int = 256 * 1024 * 1024) {
+    init(directory: URL, memoryLimit: Int = 32 * 1024 * 1024) {
         self.directory = directory.standardizedFileURL
-        self.memoryLimit = memoryLimit; self.diskLimit = diskLimit
+        self.memoryLimit = memoryLimit
     }
-    func data(for key: MediaCacheKey, lifetime: TimeInterval = 7 * 86400,
+    func data(for key: MediaCacheKey, lifetime: TimeInterval = .infinity,
               load: @escaping @Sendable () async throws -> Data) async throws -> Data {
         let now = Date()
         if var entry = memory[key], now.timeIntervalSince(entry.created) < lifetime {
@@ -41,10 +40,8 @@ actor MediaCache {
             if timestamp.isFinite && now.timeIntervalSince1970 - timestamp < lifetime && timestamp <= now.timeIntervalSince1970 {
                 let value = Data(bytes.dropFirst(8))
                 remember(value, key: key, created: Date(timeIntervalSince1970: timestamp))
-                try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: path.path)
                 return value
             }
-            try? FileManager.default.removeItem(at: path)
         }
         let revision = revisions[key.resource] ?? 0; let generation = epoch
         if let existing = pending[key] {
@@ -60,18 +57,42 @@ actor MediaCache {
             pending.removeValue(forKey: key)
             let created = Date()
             remember(value, key: key, created: created)
-            if value.count + 8 <= diskLimit {
-                var timestamp = created.timeIntervalSince1970.bitPattern.bigEndian
-                var bytes = withUnsafeBytes(of: &timestamp) { Data($0) }; bytes.append(value)
-                try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? bytes.write(to: path, options: .atomic)
-                trimDisk()
-            }
+            var timestamp = created.timeIntervalSince1970.bitPattern.bigEndian
+            var bytes = withUnsafeBytes(of: &timestamp) { Data($0) }; bytes.append(value)
+            try? FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? bytes.write(to: path, options: .atomic)
             return value
         } catch {
             if pending[key]?.id == id { pending.removeValue(forKey: key) }
             throw error
         }
+    }
+    /// Store large media as files. Each caller gets its own temporary copy so
+    /// a playback session can close or outlive a manual cache clear.
+    func materializeFile(for key: MediaCacheKey, destination: URL,
+                         load: @Sendable () async throws -> URL) async throws {
+        let path = file(for: key)
+        let manager = FileManager.default
+        if manager.fileExists(atPath: path.path) {
+            try manager.copyItem(at: path, to: destination)
+            return
+        }
+        let generation = epoch, revision = revisions[key.resource] ?? 0
+        let temporary = try await load()
+        defer { try? manager.removeItem(at: temporary) }
+        try Task.checkCancellation()
+        guard generation == epoch, revision == (revisions[key.resource] ?? 0) else { throw CancellationError() }
+        // A concurrent request might already have populated the same revision.
+        if !manager.fileExists(atPath: path.path) {
+            do {
+                try manager.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try manager.moveItem(at: temporary, to: path)
+            } catch {
+                try manager.copyItem(at: temporary, to: destination)
+                return
+            }
+        }
+        try manager.copyItem(at: path, to: destination)
     }
     func invalidate(resource: String) {
         revisions[resource, default: 0] += 1
@@ -103,17 +124,13 @@ actor MediaCache {
     private func file(for key: MediaCacheKey) -> URL {
         directory.appendingPathComponent(hash(key.resource), isDirectory: true).appendingPathComponent(hash(key.variant))
     }
-    private func trimDisk() {
-        guard let files = FileManager.default.enumerator(at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]) else { return }
-        var entries: [(URL, Int, Date)] = []
+    func diskUsage() -> Int64 {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: keys) else { return 0 }
+        var size: Int64 = 0
         for case let file as URL in files {
-            guard let info = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]), info.isRegularFile == true else { continue }
-            entries.append((file, info.fileSize ?? 0, info.contentModificationDate ?? .distantPast))
+            if let info = try? file.resourceValues(forKeys: Set(keys)), info.isRegularFile == true { size += Int64(info.fileSize ?? 0) }
         }
-        var total = entries.reduce(0) { $0 + $1.1 }
-        for entry in entries.sorted(by: { $0.2 < $1.2 }) where total > diskLimit {
-            if (try? FileManager.default.removeItem(at: entry.0)) != nil { total -= entry.1 }
-        }
+        return size
     }
 }

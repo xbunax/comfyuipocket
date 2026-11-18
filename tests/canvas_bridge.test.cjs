@@ -3,6 +3,22 @@ const assert = require('node:assert/strict');
 const { executionNode, applyPrompt, ports, connect, disconnect } = require('../ios/Pocket/CanvasBridge.js');
 const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
 const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
+const { assetInputWidget } = require('../ios/Pocket/CanvasBridge.js');
+
+test('asset drag updates only an unlinked file widget and exposes the imported file in its dropdown', async () => {
+  const f = fixture();
+  const widget = { name: 'file', value: 'previous.mp4', options: { values: ['previous.mp4'] } };
+  f.source.comfyClass = 'LoadVideo';
+  f.source.widgets = [widget];
+  assert.equal(assetInputWidget(f.source, 'image'), null);
+  assert.equal(assetInputWidget(f.source, 'video'), widget);
+  await setMobileWidget(f.app, 1, 0, 'pocket-import.mp4', 'file', true);
+  assert.equal(widget.value, 'pocket-import.mp4');
+  assert.deepEqual(widget.options.values, ['previous.mp4', 'pocket-import.mp4']);
+  assert.deepEqual(f.transactions(), [1, 1]);
+  f.source.inputs = [{ link: 7, widget: { name: 'file' } }];
+  assert.equal(assetInputWidget(f.source, 'video'), null);
+});
 
 test('graph loading retries a displaced restore and verifies identity before applying inputs', async () => {
   const workflow = {id:'minimax',nodes:[{id:36,type:'Sampler'}]};

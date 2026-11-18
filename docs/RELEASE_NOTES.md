@@ -1,5 +1,5 @@
-ComfyUI Pocket v0.16.0
+ComfyUI Pocket v0.17.0
 
-- Compact canvas buttons and four server meters for GPU, CPU, GPU memory, and RAM.
-- Expand the original node text field above the keyboard while editing, then restore the previous canvas view.
-- View submitted job progress and completion in the system Live Activity while iOS grants background execution.
+- Open the asset sidebar from the canvas toolbar to browse server input and output folders or recent workflow outputs.
+- Drag images and videos onto compatible node inputs. Pocket plugin 0.11.0 can copy output assets to the server's input directory.
+- Reuse locally cached images, videos, and thumbnails without a disk quota. View cache usage and clear it in the Connection tab.

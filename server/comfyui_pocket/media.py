@@ -1,4 +1,7 @@
 import os
+import hashlib
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 
 
@@ -61,33 +64,67 @@ def list_output(directory, folder="", offset=0, limit=60, sort="time", direction
             "nextOffset": offset + limit if offset + limit < len(entries) else None}
 
 
-def delete_media(data, directories):
+def media_path(data, directories):
     if not isinstance(data, dict):
         raise ValueError("Expected a media object")
     kind = data.get("type", "output")
     filename = data.get("filename")
     subfolder = data.get("subfolder", "")
-    if kind not in ("output", "temp") or kind not in directories:
-        raise ValueError("Only output and temporary media can be deleted")
+    if not isinstance(kind, str) or kind not in directories:
+        raise ValueError("Unsupported media directory")
     if not isinstance(filename, str) or not filename or any(c in filename for c in "/\\:\x00\r\n"):
         raise ValueError("Invalid filename")
     if not isinstance(subfolder, str) or any(c in subfolder for c in "\\:\x00\r\n"):
         raise ValueError("Invalid subfolder")
     relative = PurePosixPath(subfolder)
-    if relative.is_absolute() or ".." in relative.parts or Path(filename).suffix.lower() not in MEDIA_EXTENSIONS:
+    if relative.is_absolute() or any(p in (".", "..") for p in subfolder.split("/")) or Path(filename).suffix.lower() not in MEDIA_EXTENSIONS:
         raise ValueError("Invalid media path")
     root = Path(directories[kind]).resolve()
     candidate = root
     for part in (*relative.parts, filename):
         candidate = candidate / part
-        if candidate.is_symlink():
-            raise ValueError("Symbolic links cannot be deleted through this endpoint")
+        if linked(candidate):
+            raise ValueError("Linked media cannot be used through this endpoint")
     resolved = candidate.resolve()
     if root not in resolved.parents:
         raise ValueError("Media path escapes its directory")
-    if not resolved.exists():
-        return {"deleted": True, "alreadyMissing": True}
-    if not resolved.is_file():
+    if resolved.exists() and not resolved.is_file():
         raise ValueError("Expected a media file")
-    resolved.unlink()
+    return resolved
+
+
+def delete_media(data, directories):
+    resolved = media_path(data, {kind: path for kind, path in directories.items() if kind in ("output", "temp")})
+    try:
+        resolved.unlink()
+    except FileNotFoundError:
+        return {"deleted": True, "alreadyMissing": True}
     return {"deleted": True}
+
+
+def import_media(data, directories):
+    """Make an existing server asset available to a node that expects input media."""
+    source = media_path(data, directories)
+    info = source.stat()
+    root = Path(directories["input"]).resolve()
+    if data.get("type") == "input":
+        return {"value": source.relative_to(root).as_posix()}
+    revision = f"{source}:{info.st_size}:{info.st_mtime_ns}"
+    key = hashlib.sha256(revision.encode()).hexdigest()[:20]
+    dest = root / f"pocket-{key}{source.suffix.lower()}"
+    if linked(dest) or (dest.exists() and not dest.is_file()):
+        raise ValueError("Invalid imported media destination")
+    if not dest.exists():
+        with source.open("rb") as reader, tempfile.NamedTemporaryFile(dir=root, delete=False) as target:
+            stage = Path(target.name)
+            try:
+                shutil.copyfileobj(reader, target, length=1024 * 1024)
+                target.close()
+                current = source.stat()
+                if (info.st_size, info.st_mtime_ns) != (current.st_size, current.st_mtime_ns):
+                    raise OSError("Source changed during import")
+                os.replace(stage, dest)
+            finally:
+                target.close()
+                stage.unlink(missing_ok=True)
+    return {"value": dest.relative_to(root).as_posix()}

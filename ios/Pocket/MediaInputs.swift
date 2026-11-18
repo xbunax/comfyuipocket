@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 import ImageIO
 
 @MainActor enum MediaThumbnail {
-    static func cached(url: URL, revision: String, kind: MediaKind, lifetime: TimeInterval = 7 * 86400, resource: String? = nil,
+    static func cached(url: URL, revision: String, kind: MediaKind, lifetime: TimeInterval = .infinity, resource: String? = nil,
                        load: @escaping @MainActor @Sendable () async throws -> Data) async throws -> UIImage {
         let key = MediaCacheKey(resource: resource ?? MediaCacheKey.resource(url), variant: "thumbnail:\(revision)")
         let encoded = try await MediaCache.shared.data(for: key, lifetime: lifetime) { @MainActor in

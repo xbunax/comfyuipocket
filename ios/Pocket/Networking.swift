@@ -79,13 +79,20 @@ final class ComfyClient {
         for task in pendingSizes.values { task.cancel() }
         pendingSizes.removeAll()
     }
-    func outputDirectory(folder: String, offset: Int, sort: String, ascending: Bool) async throws -> OutputDirectoryPage {
-        let data = try await checked(request("pocket/v1/outputs", query: [
+    func outputDirectory(folder: String, offset: Int, sort: String, ascending: Bool, input: Bool = false) async throws -> OutputDirectoryPage {
+        let data = try await checked(request(input ? "pocket/v1/inputs" : "pocket/v1/outputs", query: [
             .init(name: "folder", value: folder), .init(name: "offset", value: String(offset)),
             .init(name: "limit", value: "60"), .init(name: "sort", value: sort),
             .init(name: "direction", value: ascending ? "ascending" : "descending")
         ]))
         return try JSONDecoder().decode(OutputDirectoryPage.self, from: data)
+    }
+    func importAsset(_ asset: OutputImage) async throws -> String {
+        let result = try await json("pocket/v1/media/import", method: "POST", body: .object([
+            "type": .string(asset.type), "subfolder": .string(asset.subfolder), "filename": .string(asset.filename)
+        ]))
+        guard let value = result["value"].text.nonEmpty else { throw PocketError.message("服务器没有返回输入文件路径。") }
+        return value
     }
     func image(_ image: OutputImage) async throws -> Data {
         try await mediaData(mediaURL(image), revision: image.promptID)
@@ -128,7 +135,7 @@ final class ComfyClient {
         let url = url("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])
         return loopbackAccess?.mediaURL(url) ?? url
     }
-    private func mediaData(_ url: URL, revision: String, lifetime: TimeInterval = 7 * 86400) async throws -> Data {
+    private func mediaData(_ url: URL, revision: String, lifetime: TimeInterval = .infinity) async throws -> Data {
         let session = session
         return try await MediaCache.shared.data(for: MediaCacheKey(resource: cacheResource(url), variant: "original:\(revision)"), lifetime: lifetime) {
             let (data, response) = try await session.data(from: url)
@@ -155,12 +162,17 @@ final class ComfyClient {
             try data.write(to: file); return file
         }
         let r = try request("view", query: [.init(name: "filename", value: image.filename), .init(name: "subfolder", value: image.subfolder), .init(name: "type", value: image.type)])
-        let (temporary, response) = try await session.download(for: r)
-        guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode) else {
-            throw PocketError.message("作品下载失败。")
-        }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString)-\(URL(fileURLWithPath: image.filename).lastPathComponent)")
-        try FileManager.default.moveItem(at: temporary, to: file)
+        let key = MediaCacheKey(resource: cacheResource(mediaURL(image)), variant: "video-file:\(image.promptID)")
+        let session = session
+        try await MediaCache.shared.materializeFile(for: key, destination: file) {
+            let (temporary, response) = try await session.download(for: r)
+            guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode) else {
+                try? FileManager.default.removeItem(at: temporary)
+                throw PocketError.message("作品下载失败。")
+            }
+            return temporary
+        }
         return file
     }
     func upload(_ data: Data, filename: String, mime: String) async throws -> String {
