@@ -1,6 +1,5 @@
-ComfyUI Pocket v0.17.1
+ComfyUI Pocket v0.17.2
 
-- Drag images directly from the asset sidebar into reference areas on Lazy Merge, Qwen and Krea workbenches.
-- Send assets to the Lazy H3 Director timeline and Lazy H3 Prompt reference area. Recognize the Goohai image loader.
-- Report when a reference drop cannot add an image or the canvas is busy.
-- Browse assets in a horizontally scrolling strip above the canvas on compact phones. iPad and wide windows keep the vertical sidebar.
+- Receive canvas asset drops directly in the app and report accepted, cancelled, and failed imports.
+- Tap an asset and then tap a compatible node or reference area to insert it without a drag gesture.
+- Drop images on the body of a Lazy Merge, Qwen, or Krea workbench to add them to its reference area.

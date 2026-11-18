@@ -49,6 +49,13 @@ test('asset drag recognizes Lazy reference panels and the H3 timeline with the n
     assert.throws(() => dropReferenceAsset(app, source, hit, {...image, media_kind: 'video'}, 20, 30), /只接收图片/);
     assert.equal(dropReferenceAsset(app, source, { closest: () => zone }, image, 20, 30), null);
 
+    const nodeBody = { closest: () => null };
+    app.canvasContainer = { contains: element => element === nodeBody || element === hit };
+    root.querySelectorAll = () => [zone];
+    widget.value = '[]';
+    assert.equal(dropReferenceAsset(app, source, nodeBody, image, 20, 30), 'reference-added');
+    assert.deepEqual(JSON.parse(widget.value), [image]);
+
     for (const [type, name] of [['LazyQwenWorkbench', 'lazy_qwen_wb'], ['LazyKreaWorkbench', 'lazy_krea_wb']]) {
       source.comfyClass = type;
       source.widgets[0].name = name;

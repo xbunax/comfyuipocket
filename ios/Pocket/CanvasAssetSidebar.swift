@@ -1,11 +1,12 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 extension UTType {
     static let pocketCanvasAsset = UTType(exportedAs: "com.xbunax.comfyuipocket.canvas-asset", conformingTo: .data)
 }
 
-struct CanvasAssetDrag: Codable {
+struct CanvasAssetDrag: Codable, Equatable {
     let serverID: String
     let asset: OutputImage
 
@@ -31,6 +32,11 @@ struct CanvasAssetSidebar: View {
     let close: () -> Void
     let message: String?
     let importing: Bool
+    let selected: CanvasAssetDrag?
+    let select: (CanvasAssetDrag) -> Void
+    let dragBegan: () -> Void
+    let dragEnded: (Bool) -> Void
+    let cancelSelection: () -> Void
     @State private var source: Source = .output
     @State private var folder = ""
     @State private var entries: [OutputDirectoryEntry] = []
@@ -71,8 +77,17 @@ struct CanvasAssetSidebar: View {
             }
             if importing {
                 ProgressView("正在导入…").font(.caption).controlSize(.small)
+            } else if let selected {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selected.asset.filename).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                        Text(message ?? "点画布里的节点或参考图区。").lineLimit(2)
+                    }
+                    Spacer(minLength: 4)
+                    Button("取消", action: cancelSelection).buttonStyle(.borderless)
+                }.font(.caption2).foregroundStyle(PocketPalette.secondary)
             } else {
-                Text(message ?? (horizontal ? "长按素材，向下拖入画布。" : "拖到兼容的加载节点，或将图片拖到节点的参考图区。"))
+                Text(message ?? "长按拖入画布，或点选素材再点目标节点。")
                     .font(.caption2).foregroundStyle(PocketPalette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -125,17 +140,22 @@ struct CanvasAssetSidebar: View {
     }
 
     private func assetRow(_ asset: OutputImage) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let drag = CanvasAssetDrag(serverID: store.client?.serverID ?? "", asset: asset)
+        return VStack(alignment: .leading, spacing: 4) {
             RemoteImage(output: asset, fill: true).frame(height: horizontal ? 59 : 76).clipShape(.rect(cornerRadius: 7))
             Text(asset.filename).font(.caption2).lineLimit(2).truncationMode(.middle)
                 .foregroundStyle(PocketPalette.text)
         }
         .padding(4).frame(width: horizontal ? 112 : nil)
         .background(PocketPalette.background, in: .rect(cornerRadius: 9))
-        .contentShape(Rectangle())
-        .onDrag { CanvasAssetDrag(serverID: store.client?.serverID ?? "", asset: asset).provider() }
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("拖到画布中对应的输入节点")
+        .overlay {
+            if selected == drag { RoundedRectangle(cornerRadius: 9).strokeBorder(PocketPalette.accent, lineWidth: 2) }
+        }
+        .accessibilityHidden(true)
+        .overlay {
+            CanvasAssetTileInput(asset: drag, selected: selected == drag, select: { select(drag) },
+                                 dragBegan: dragBegan, dragEnded: dragEnded)
+        }
     }
 
     private func load(offset: Int = 0) async {
@@ -162,6 +182,93 @@ struct CanvasAssetSidebar: View {
         } catch {
             guard requestID == id, !Task.isCancelled else { return }
             failure = error.localizedDescription
+        }
+    }
+}
+
+/// Keep both ends of the drag in UIKit. The payload stays in the same app.
+private struct CanvasAssetTileInput: UIViewRepresentable {
+    let asset: CanvasAssetDrag
+    let selected: Bool
+    let select: () -> Void
+    let dragBegan: () -> Void
+    let dragEnded: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .custom)
+        button.isAccessibilityElement = true
+        button.addTarget(context.coordinator, action: #selector(Coordinator.selectAsset), for: .touchUpInside)
+        let drag = UIDragInteraction(delegate: context.coordinator)
+        drag.isEnabled = true
+        button.addInteraction(drag)
+        return button
+    }
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.parent = self
+        button.accessibilityLabel = asset.asset.filename
+        button.accessibilityHint = "轻点后选取目标节点，也可按住拖入画布"
+        button.accessibilityTraits = selected ? [.button, .selected] : .button
+    }
+
+    final class Coordinator: NSObject, UIDragInteractionDelegate {
+        var parent: CanvasAssetTileInput
+        init(_ parent: CanvasAssetTileInput) { self.parent = parent }
+        @objc func selectAsset() { parent.select() }
+        func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: UIDragSession) -> [UIDragItem] {
+            let item = UIDragItem(itemProvider: parent.asset.provider())
+            item.localObject = parent.asset
+            return [item]
+        }
+        func dragInteraction(_ interaction: UIDragInteraction, sessionWillBegin session: UIDragSession) { parent.dragBegan() }
+        func dragInteraction(_ interaction: UIDragInteraction, session: UIDragSession, didEndWith operation: UIDropOperation) {
+            parent.dragEnded(operation == .copy)
+        }
+        func dragInteraction(_ interaction: UIDragInteraction, sessionIsRestrictedToDraggingApplication session: UIDragSession) -> Bool { true }
+    }
+}
+
+struct CanvasAssetTarget: UIViewRepresentable {
+    let targeted: (Bool) -> Void
+    let dropped: (CanvasAssetDrag, CGPoint) -> Void
+    let tapped: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.addInteraction(UIDropInteraction(delegate: context.coordinator))
+        view.addGestureRecognizer(UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:))))
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { context.coordinator.parent = self }
+
+    final class Coordinator: NSObject, UIDropInteractionDelegate {
+        var parent: CanvasAssetTarget
+        init(_ parent: CanvasAssetTarget) { self.parent = parent }
+        private func position(_ point: CGPoint, in view: UIView) -> CGPoint? {
+            guard view.bounds.width > 0, view.bounds.height > 0, view.bounds.contains(point) else { return nil }
+            return CGPoint(x: (point.x - view.bounds.minX) / view.bounds.width,
+                           y: (point.y - view.bounds.minY) / view.bounds.height)
+        }
+        private func asset(in session: UIDropSession) -> CanvasAssetDrag? {
+            session.items.first?.localObject as? CanvasAssetDrag
+        }
+        func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool { asset(in: session) != nil }
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: UIDropSession) { parent.targeted(true) }
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) { parent.targeted(false) }
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) { parent.targeted(false) }
+        func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+            UIDropProposal(operation: .copy)
+        }
+        func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+            guard let asset = asset(in: session), let view = interaction.view,
+                  let point = position(session.location(in: view), in: view) else { return }
+            parent.targeted(false)
+            parent.dropped(asset, point)
+        }
+        @objc func tap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = recognizer.view, let point = position(recognizer.location(in: view), in: view) else { return }
+            parent.tapped(point)
         }
     }
 }

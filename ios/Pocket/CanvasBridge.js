@@ -291,18 +291,21 @@
     let media;
     if (!zone && domName) {
       const root = node.widgets?.find(widget => widget.name === domName)?.element;
-      if (root?.contains(hit)) {
+      if (root) {
         // Lazy workbenches have an unclassed drop area. Its persistent hint
         // remains the first child after thumbnails have been added.
-        for (let element = hit; element && element !== root; element = element.parentElement) {
+        for (let element = root.contains(hit) ? hit : null; element && element !== root; element = element.parentElement) {
           if (element.firstElementChild?.textContent === "点击添加，或拖入本地/资产图片") {
             zone = element;
-            media = node.widgets.find(widget => widget.name === "图片数据");
-            if (!media) throw new Error("参考图区尚未初始化，请稍后重试。");
             break;
           }
         }
+        // A drop on the workbench body also targets its own reference region.
+        zone ??= Array.from(root.querySelectorAll("div")).find(element =>
+          element.firstElementChild?.textContent === "点击添加，或拖入本地/资产图片");
+        if (zone) media = node.widgets.find(widget => widget.name === "图片数据");
       }
+      if (!zone || !media) throw new Error("这个工作台的参考图区尚未就绪，请聚焦节点后重试。");
     }
     if (!zone) return null;
     if (!timeline && asset.media_kind !== "image") throw new Error("这个参考图区只接收图片。");
@@ -712,7 +715,7 @@
       const reference = dropReferenceAsset(app, node, hit, asset, clientX, clientY);
       if (reference) return reference;
       const widget = assetInputWidget(node, asset.media_kind, node?.getWidgetOnPos?.(...point));
-      if (!widget) throw new Error("请拖到接收此类文件的加载节点或参考图区。");
+      if (!widget) throw new Error("请选择支持此文件的加载节点或参考图区。");
       pendingAsset = { token, graph, node, widget, kind: asset.media_kind };
       return "input";
     },
