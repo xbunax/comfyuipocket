@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ios/Pocket/Assets.xcassets/AppIcon.appiconset/AppIcon.png" alt="ComfyUI Pocket 图标" width="120" height="120">
+  <img src="ios/Artwork/AppIcon.svg" alt="ComfyUI Pocket 图标" width="120" height="120">
 </p>
 
 <h1 align="center">ComfyUI Pocket</h1>

@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">Comfy Pocket</title>
+  <defs>
+    <clipPath id="tile">
+      <rect x="58" y="47" width="908" height="918" rx="184"/>
+    </clipPath>
+    <linearGradient id="sage" x1="0" y1="0" x2=".78" y2="1">
+      <stop stop-color="#a7bb9f"/>
+      <stop offset=".47" stop-color="#648d7d"/>
+      <stop offset=".76" stop-color="#466f60"/>
+      <stop offset="1" stop-color="#91a887"/>
+    </linearGradient>
+    <linearGradient id="cream" x1="0" y1="0" x2=".63" y2="1">
+      <stop stop-color="#fff9ee"/>
+      <stop offset=".58" stop-color="#f6e0c0"/>
+      <stop offset="1" stop-color="#cfa46f"/>
+    </linearGradient>
+    <linearGradient id="gold" x1=".2" y1="0" x2=".85" y2="1">
+      <stop stop-color="#f9e3bf"/>
+      <stop offset=".52" stop-color="#d8b285"/>
+      <stop offset="1" stop-color="#f0d6ac"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2=".85" y2="1">
+      <stop stop-color="#477a77"/>
+      <stop offset="1" stop-color="#244b4d"/>
+    </linearGradient>
+    <linearGradient id="jade" x1=".14" y1="0" x2=".58" y2="1">
+      <stop stop-color="#b9d5c7"/>
+      <stop offset=".42" stop-color="#7da399"/>
+      <stop offset="1" stop-color="#b4bfa1"/>
+    </linearGradient>
+    <linearGradient id="glass" x1=".14" y1="0" x2=".79" y2="1">
+      <stop stop-color="#f3f6ed"/>
+      <stop offset=".34" stop-color="#abbbb1"/>
+      <stop offset=".72" stop-color="#b8c1ab"/>
+      <stop offset="1" stop-color="#f8eacb"/>
+    </linearGradient>
+    <linearGradient id="glass-edge" x1="0" y1="0" x2=".33" y2="1">
+      <stop stop-color="#ffffff"/>
+      <stop offset=".46" stop-color="#dce6d4"/>
+      <stop offset="1" stop-color="#fff4d5"/>
+    </linearGradient>
+    <linearGradient id="glass-light" x1="0" y1="0" x2=".75" y2=".64">
+      <stop stop-color="#fff" stop-opacity=".68"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tube" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#c7dbce"/>
+      <stop offset=".48" stop-color="#f5f4e7"/>
+      <stop offset="1" stop-color="#bfc9a9"/>
+    </linearGradient>
+    <linearGradient id="type" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#fff8e6"/>
+      <stop offset="1" stop-color="#f5e6c6"/>
+    </linearGradient>
+    <radialGradient id="top-light" cx=".78" cy="0" r=".65">
+      <stop stop-color="#e8f6eb" stop-opacity=".62"/>
+      <stop offset="1" stop-color="#e8f6eb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="under-glass">
+      <stop stop-color="#1f4438" stop-opacity=".47"/>
+      <stop offset="1" stop-color="#1f4438" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="58" y="47" width="908" height="918" fill="url(#sage)"/>
+    <path fill="url(#gold)" d="M58 47H656C582 133 548 209 473 240C349 292 223 263 143 355C106 397 78 436 58 477Z"/>
+    <path fill="url(#cream)" d="M58 47H656C578 141 548 214 449 235C321 263 247 212 148 259C115 274 80 297 58 325Z"/>
+    <path fill="none" stroke="#fff9e9" stroke-opacity=".72" stroke-width="2" d="M58 325C80 297 115 274 148 259C247 212 321 263 449 235C548 214 578 141 656 47"/>
+    <path fill="url(#teal)" d="M58 557C192 570 245 685 320 797C380 881 439 931 493 965H58Z"/>
+    <path fill="url(#cream)" d="M966 454V965H362C481 911 591 849 685 787C805 706 796 566 966 454Z"/>
+    <path fill="url(#jade)" d="M58 916C116 831 197 776 311 800C455 830 605 922 766 931C849 935 909 917 966 877V965H58Z"/>
+    <path fill="none" stroke="#e3eee0" stroke-opacity=".7" stroke-width="2" d="M58 916C116 831 197 776 311 800C455 830 605 922 766 931C849 935 909 917 966 877"/>
+    <path fill="url(#cream)" fill-opacity=".72" d="M385 965C436 925 484 910 544 888C631 915 697 928 766 931C849 935 909 917 966 877V965Z"/>
+    <rect x="58" y="47" width="908" height="918" fill="url(#top-light)"/>
+  </g>
+  <rect x="59" y="48" width="906" height="916" rx="183" fill="none" stroke="#fffdf2" stroke-opacity=".44" stroke-width="2"/>
+
+  <g fill="url(#under-glass)">
+    <ellipse cx="335" cy="482" rx="174" ry="72"/>
+    <ellipse cx="713" cy="336" rx="146" ry="58"/>
+    <ellipse cx="713" cy="550" rx="146" ry="58"/>
+  </g>
+  <path fill="none" stroke="url(#tube)" stroke-width="23" stroke-linecap="round"
+        d="M446 399C551 407 517 291 608 294M446 429C549 422 517 514 608 506"/>
+  <path fill="none" stroke="#f8fbef" stroke-opacity=".45" stroke-width="4" stroke-linecap="round"
+        d="M446 392C548 398 513 281 608 285M446 420C549 413 520 505 608 498"/>
+  <g fill="url(#glass)" stroke="url(#glass-edge)" stroke-width="2">
+    <rect x="214" y="336" width="241" height="174" rx="53"/>
+    <rect x="608" y="228" width="204" height="129" rx="44"/>
+    <rect x="608" y="440" width="204" height="129" rx="44"/>
+  </g>
+  <g fill="url(#glass-light)">
+    <path d="M226 411V390C226 362 246 346 274 346H396C419 346 430 355 438 372H287C256 372 235 385 226 411Z"/>
+    <path d="M619 296V273C619 250 633 238 661 238H760C781 238 794 246 800 259H672C644 259 627 273 619 296Z"/>
+    <path d="M619 508V485C619 462 633 450 661 450H760C781 450 794 458 800 471H672C644 471 627 485 619 508Z"/>
+  </g>
+  <g fill="#6b8e6e" stroke="#eef1dd" stroke-opacity=".58" stroke-width="1.4">
+    <path d="M309 394Q309 379 323 386L367 411Q380 420 367 429L323 454Q309 461 309 446Z"/>
+    <circle cx="659" cy="292" r="20.5"/>
+    <circle cx="659" cy="503" r="20.5"/>
+  </g>
+
+  <g fill="none" stroke="url(#type)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M385 630C371 609 336 609 320 629C302 649 305 669 317 682C334 702 369 702 385 678"/>
+    <ellipse cx="441" cy="665" rx="30" ry="27"/>
+    <path d="M495 693V640M495 659C495 634 541 631 541 660V693M541 659C541 634 590 631 590 660V693"/>
+    <path d="M621 694V631C621 615 633 606 648 612M609 642H645"/>
+    <path d="M665 641L689 690M720 641L684 709C680 717 674 720 667 716"/>
+  </g>
+  <g fill="none" stroke="#e5ead9" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M378 760V737H387C398 737 398 750 387 750H378"/>
+    <ellipse cx="437" cy="748.5" rx="12" ry="11.5"/>
+    <path d="M503 740C495 731 479 738 479 749C479 759 495 765 503 757"/>
+    <path d="M534 737V760M552 737L537 750M543 746L554 760"/>
+    <path d="M595 737H578V760H595M578 748H592"/>
+    <path d="M626 737H644M635 737V760"/>
+  </g>
+</svg>
