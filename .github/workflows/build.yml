@@ -77,7 +77,6 @@ jobs:
       - name: Generate Xcode project
         run: |
           brew install xcodegen
-          swift scripts/make_icon.swift
           xcodegen generate
       - name: Simulator unit and UI tests
         if: github.event_name == 'workflow_dispatch' && inputs.run_simulator_tests

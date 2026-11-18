@@ -13,4 +13,3 @@ DerivedData/
 __pycache__/
 .pytest_cache/
 .venv/
-ios/Pocket/Assets.xcassets/AppIcon.appiconset/AppIcon.png

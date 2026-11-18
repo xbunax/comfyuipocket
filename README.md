@@ -96,7 +96,7 @@ Release 同时包含插件 ZIP 和 SHA256 校验文件。构建失败不会发�
 ```text
 ios/Pocket/              SwiftUI 界面、API 客户端、工作流模型与自动同步
 server/comfyui_pocket/   ComfyUI 插件、全量工作流导出与侧栏
-scripts/                 图标、插件打包、签名等辅助脚本
+scripts/                 插件打包、签名等辅助脚本
 tests/                   插件单元测试
 .github/workflows/       云端构建与发布
 ```
@@ -118,7 +118,9 @@ python scripts/package_plugin.py
 
 ## 参考与许可
 
-交互目标参考 ComfyLink；本项目独立实现，不复制其品牌、素材或云服务协议。使用 [ComfyUI 官方 API](https://docs.comfy.org/development/comfyui-server/comms_routes)、[Apple Liquid Glass](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)、[Tailscale iOS](https://tailscale.com/download/ios)。本项目 MIT，第三方组件保留各自许可证。
+自 v0.17.5 起，ComfyUI Pocket 自有的客户端、插件及图标素材采用 PolyForm Noncommercial License 1.0.0，允许按许可证条款进行非商业使用、修改和分发。商业使用需取得版权方授权。此前按 MIT 发布的版本继续适用当时的许可，第三方组件适用各自的许可证。[许可证](LICENSE) · [版权声明](NOTICE)
+
+项目独立实现，交互设计参考 ComfyLink。使用 [ComfyUI 官方 API](https://docs.comfy.org/development/comfyui-server/comms_routes)、[Apple Liquid Glass](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)、[Tailscale iOS](https://tailscale.com/download/ios)。
 
 ## Optional P2P pairing (v0.13.0)
 

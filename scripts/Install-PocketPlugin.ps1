@@ -12,5 +12,7 @@ foreach ($relative in @('__init__.py', 'catalog.py', 'routes.py', 'media.py', 'p
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $source $relative) -Destination $destination
 }
-Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $target 'LICENSE')
+foreach ($name in @('LICENSE', 'NOTICE')) {
+    Copy-Item -LiteralPath (Join-Path $repo $name) -Destination (Join-Path $target $name)
+}
 Write-Output "Installed: $target. Restart ComfyUI to enable Pocket."

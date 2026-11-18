@@ -8,7 +8,7 @@ settings:
     SWIFT_VERSION: '5.0'
     IPHONEOS_DEPLOYMENT_TARGET: '26.0'
     TARGETED_DEVICE_FAMILY: '1,2'
-    MARKETING_VERSION: '0.17.4'
+    MARKETING_VERSION: '0.17.5'
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 packages:
@@ -28,6 +28,10 @@ targets:
       - path: ios/Pocket
         excludes: [CanvasBridge.js]
       - path: ios/Pocket/CanvasBridge.js
+        buildPhase: resources
+      - path: LICENSE
+        buildPhase: resources
+      - path: NOTICE
         buildPhase: resources
     settings:
       base:
