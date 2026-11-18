@@ -6,16 +6,18 @@ final class ComfyClient {
     let serverID: String
     let loopbackAccess: LoopbackAccess?
     let displayAddress: String
-    let clientID = UUID().uuidString
+    let clientID: String
     private var session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var sizeCache: [String: (bytes: Int64?, expires: Date)] = [:]
     private var pendingSizes: [String: Task<Int64?, Never>] = [:]
-    init(baseURL: URL, serverID: String? = nil, loopbackAccess: LoopbackAccess? = nil, displayAddress: String? = nil) {
+    init(baseURL: URL, serverID: String? = nil, loopbackAccess: LoopbackAccess? = nil, displayAddress: String? = nil,
+         clientID: String = UUID().uuidString) {
         self.baseURL = baseURL
         self.serverID = serverID ?? baseURL.absoluteString
         self.loopbackAccess = loopbackAccess
         self.displayAddress = displayAddress ?? baseURL.host ?? baseURL.absoluteString
+        self.clientID = clientID
         let config = URLSessionConfiguration.ephemeral
         if let loopbackAccess { config.httpAdditionalHeaders = ["X-Pocket-Local-Token": loopbackAccess.token] }
         config.timeoutIntervalForRequest = 30
@@ -66,10 +68,13 @@ final class ComfyClient {
         return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
     }
     func probeServer() async throws {
-        var request = try request("system_stats")
+        var request = try request("queue")
         request.timeoutInterval = 6
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        _ = try JSONDecoder().decode(JSONValue.self, from: await checked(request))
+        let queue = try JSONDecoder().decode(JSONValue.self, from: await checked(request))
+        guard case .array = queue["queue_running"], case .array = queue["queue_pending"] else {
+            throw PocketError.message("ComfyUI 未返回有效的队列状态。")
+        }
     }
     func renewSession() {
         disconnect()

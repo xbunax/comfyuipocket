@@ -9,6 +9,7 @@ final class PocketStore {
     var incomingPairingCode: String?
     var connected = false
     var restoringConnection = false
+    var connectionRecoveryError: String?
     @ObservationIgnored private var suspended = false
     @ObservationIgnored private let generationActivities = GenerationActivities()
     private var canMonitorServer: Bool { !suspended || generationActivities.hasBackgroundExecution }
@@ -266,10 +267,15 @@ final class PocketStore {
             if suspended { irohTransport?.suspendMonitoring() }
             startEvents(next)
             await refresh()
-            do { nodeInfo = try await next.json("object_info") } catch { self.notice = "节点元信息暂不可用，仍可编辑已有参数。" }
-            let pluginInfo = try? await next.json("pocket/v1/info")
-            pluginAvailable = pluginInfo?["version"].text.nonEmpty != nil
-            pluginCapabilities = Set(pluginInfo?["capabilities"].array.map(\.text) ?? [])
+            guard client === next, !restoringConnection else { return }
+            do {
+                let definitions = try await next.json("object_info")
+                if client === next { nodeInfo = definitions }
+            } catch {
+                if client === next, !restoringConnection { notice = "节点元信息暂不可用，仍可编辑已有参数。" }
+            }
+            await refreshPluginInfo(next, initial: true)
+            guard client === next, !restoringConnection else { return }
             if pluginAvailable {
                 await syncNow()
             } else {
@@ -283,9 +289,16 @@ final class PocketStore {
             }
         }
     }
+    private func refreshPluginInfo(_ api: ComfyClient, initial: Bool = false) async {
+        let info = try? await api.json("pocket/v1/info")
+        guard client === api, !restoringConnection, info != nil || initial else { return }
+        pluginAvailable = info?["version"].text.nonEmpty != nil
+        pluginCapabilities = Set(info?["capabilities"].array.map(\.text) ?? [])
+    }
     func disconnect() {
         lastConnection = UUID(); connecting = false
         recovery?.cancel(); recovery = nil; restoringConnection = false
+        connectionRecoveryError = nil
         events?.cancel(); events = nil; polling?.cancel(); polling = nil
         syncLoop?.cancel(); syncLoop = nil; pushTask?.cancel(); pushTask = nil
         client?.disconnect(); client = nil; connected = false; socketConnected = false
@@ -345,41 +358,68 @@ final class PocketStore {
             else { startEvents(api); Task { await refresh() } }
             return
         }
-        recovery?.cancel(); recovery = nil
+        recovery?.cancel(); recovery = nil; restoringConnection = false
         irohTransport?.suspendMonitoring()
         events?.cancel(); polling?.cancel()
         client?.disconnect(); socketConnected = false
     }
-    private func restoreP2P(_ api: ComfyClient, transport: IrohTransport) {
+    func retryServerConnection() {
+        guard let api = client, let transport = irohTransport else { return }
+        restoreP2P(api, transport: transport, force: true)
+    }
+    private func restoreP2P(_ api: ComfyClient, transport: IrohTransport, force: Bool = false) {
         guard canMonitorServer, recovery == nil, client === api else { return }
         restoringConnection = true
+        connectionRecoveryError = nil
         notice = nil
         if pluginAvailable { syncStatus = "直连恢复后自动同步" }
         events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
+        socketConnected = false
         transport.suspendMonitoring()
         recovery = Task { [weak self] in
-            var rebuild = false
-            var delay = 1
-            while let self, !Task.isCancelled, self.client === api, self.canMonitorServer {
+            for attempt in 0..<3 {
+                guard let self, !Task.isCancelled, self.client === api, self.canMonitorServer else { return }
+                var verifying = false
                 do {
-                    try await transport.prepareToResume(rebuild: rebuild)
+                    try await transport.prepareToResume(reopenLocalChannel: attempt == 1 || (force && attempt == 0),
+                                                        reconnectPeer: attempt == 2)
                     try Task.checkCancellation()
-                    api.renewSession()
-                    try await api.probeServer()
+                    guard let url = transport.baseURL, let access = transport.access else {
+                        throw PocketError.message("本地通道未就绪。")
+                    }
+                    let next: ComfyClient
+                    if url == api.baseURL && access.token == api.loopbackAccess?.token {
+                        api.renewSession()
+                        next = api
+                    } else {
+                        next = ComfyClient(baseURL: url, serverID: api.serverID, loopbackAccess: access,
+                                           displayAddress: api.displayAddress, clientID: api.clientID)
+                    }
+                    transport.verifyServerAccess()
+                    verifying = true
+                    try await next.probeServer()
                     try Task.checkCancellation()
                     guard self.client === api, self.canMonitorServer else { return }
+                    self.client = next
                     self.recovery = nil
                     self.restoringConnection = false
                     transport.didRestoreServerAccess()
-                    self.startEvents(api)
+                    self.startEvents(next)
                     await self.refresh()
+                    await self.refreshPluginInfo(next)
                     await self.syncNow()
                     return
                 } catch {
                     guard !Task.isCancelled, self.client === api, self.canMonitorServer else { return }
-                    rebuild = true
-                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-                    delay = min(delay * 2, 15)
+                    transport.recordRecoveryFailure(error, verifying: verifying, retrying: attempt < 2)
+                    if attempt == 2 {
+                        self.recovery = nil
+                        self.restoringConnection = false
+                        self.connectionRecoveryError = error.localizedDescription
+                        self.syncStatus = "等待重新连接"
+                        return
+                    }
+                    do { try await Task.sleep(for: .seconds(attempt + 1)) } catch { return }
                 }
             }
         }
@@ -405,7 +445,7 @@ final class PocketStore {
         }
     }
     func refresh() async {
-        guard canMonitorServer, !restoringConnection, let api = client else { return }
+        guard canMonitorServer, !restoringConnection, connectionRecoveryError == nil, let api = client else { return }
         do {
             let q = try await api.json("queue")
             let h = try await api.json("history", query: [.init(name: "max_items", value: "200")])
@@ -417,7 +457,8 @@ final class PocketStore {
             updateGenerationActivities()
         } catch {
             guard canMonitorServer, !restoringConnection, !Task.isCancelled, client === api else { return }
-            if let transport = irohTransport, (error as? URLError)?.code == .cannotConnectToHost {
+            if let transport = irohTransport, let code = (error as? URLError)?.code,
+               [.cannotConnectToHost, .networkConnectionLost, .timedOut].contains(code) {
                 restoreP2P(api, transport: transport)
             } else {
                 notice = "刷新失败：\(error.localizedDescription)"

@@ -64,16 +64,24 @@ final class IrohTransport {
         status = "建立仅直连通道…"
         endpoint = try await bindEndpoint()
         _ = try await ensureConnection()
+        try await openLocalChannel()
+        status = "已直连 · 已禁用中继"
+        resumeMonitoring()
+    }
+
+    private func openLocalChannel() async throws {
         let url = try await startListener()
         guard let access else { throw PocketError.message("本地通道未就绪。") }
         let cookie = HTTPCookie(properties: [.name: access.cookieName, .value: access.token,
             .domain: "127.0.0.1", .path: "/", .init("HttpOnly"): "TRUE", .init("SameSite"): "Strict"])!
         self.cookie = cookie
-        await WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie)
+        try await PairingDeadline<Void>.run(5, timeoutMessage: "更新画布连接凭证超时。") {
+            await WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie)
+        }
+        try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
         baseURL = url
-        status = "已直连 · 已禁用中继"
         Self.log.info("phase=loopback result=ready")
-        resumeMonitoring()
     }
 
     func stop(status finalStatus: String = "已断开") {
@@ -93,25 +101,52 @@ final class IrohTransport {
         monitor = nil
     }
 
-    // Keep the same loopback address and authorization for already-open web views.
-    func prepareToResume(rebuild: Bool) async throws {
+    func prepareToResume(reopenLocalChannel: Bool, reconnectPeer: Bool) async throws {
         try Task.checkCancellation()
         guard !stopped else { throw CancellationError() }
-        if rebuild || !localReady {
+        if reopenLocalChannel || !localReady || baseURL == nil {
             status = "正在恢复本地通道…"
             closeListener()
-            _ = try await startListener()
+            let previousCookie = cookie
+            cookie = nil; access = nil; baseURL = nil
+            if let previousCookie {
+                _ = try? await PairingDeadline<Void>.run(3) {
+                    await WKWebsiteDataStore.default().httpCookieStore.delete(previousCookie)
+                }
+            }
+            try Task.checkCancellation()
+            try await openLocalChannel()
         }
         try Task.checkCancellation()
-        if rebuild, let connection {
+        if reconnectPeer {
+            // Let any dial which was already in flight finish before replacing it.
+            if let connecting { _ = try? await connecting.value; try Task.checkCancellation() }
             speedTest.clear()
-            try? connection.close(errorCode: 1, reason: Data("foreground recovery".utf8))
-            self.connection = nil
+            try? connection?.close(errorCode: 1, reason: Data("foreground recovery".utf8))
+            connection = nil
+            if let oldEndpoint = endpoint {
+                endpoint = nil
+                _ = try? await timed(3) { try await oldEndpoint.close() }
+            }
         }
+        try Task.checkCancellation()
+        retryAfter = nil
         _ = try await ensureConnection()
     }
 
+    func verifyServerAccess() {
+        status = "正在验证 ComfyUI 响应…"
+    }
+
+    func recordRecoveryFailure(_ error: Error, verifying: Bool, retrying: Bool) {
+        let phase = verifying ? "server_probe" : "restore_transport"
+        let code = (error as NSError).code
+        Self.log.error("phase=\(phase, privacy: .public) result=failed error=\(String(reflecting: type(of: error)), privacy: .public) code=\(code)")
+        status = retrying ? "恢复尝试失败 · \(error.localizedDescription)" : "恢复失败 · \(error.localizedDescription)"
+    }
+
     func didRestoreServerAccess() {
+        Self.log.info("phase=server_probe result=ready")
         status = "已直连 · 已禁用中继"
         resumeMonitoring()
     }
@@ -250,9 +285,9 @@ final class IrohTransport {
         do {
             // A fresh endpoint clears the old remote address and its pending dial.
             // Keep the phone's identity and the local HTTP/WebSocket listener.
-            try await endpoint.close()
-            self.endpoint = nil
+            _ = try? await timed(3) { try await endpoint.close() }
             try Task.checkCancellation()
+            self.endpoint = nil
             let rediscoveryEndpoint = try await bindEndpoint()
             self.endpoint = rediscoveryEndpoint
             let connection = try await dial(rediscoveryEndpoint, address: discovered, seconds: 12)
@@ -316,10 +351,8 @@ final class IrohTransport {
 
     private func startListener() async throws -> URL {
         let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        let port = access.flatMap { NWEndpoint.Port(rawValue: $0.port) } ?? .any
-        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port)
-        let listener = try NWListener(using: parameters, on: port)
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        let listener = try NWListener(using: parameters, on: .any)
         self.listener = listener
         listener.newConnectionHandler = { [weak self, weak listener] socket in
             Task { @MainActor in
@@ -336,15 +369,15 @@ final class IrohTransport {
                 guard let self, let listener, self.listener === listener else { return }
                 switch state {
                 case .ready:
-                    self.localReady = true
-                    guard let continuation = self.listenerReady else { return }
+                    guard let continuation = self.listenerReady else {
+                        self.localReady = self.access != nil
+                        return
+                    }
                     self.listenerReady = nil
                     do {
                         guard let port = listener.port?.rawValue else { throw PocketError.message("本地通道没有可用端口。") }
-                        if let access = self.access, access.port != port {
-                            throw PocketError.message("本地通道未能恢复原端口。")
-                        }
-                        if self.access == nil { self.access = LoopbackAccess(token: try Self.randomToken(), port: port) }
+                        self.access = LoopbackAccess(token: try Self.randomToken(), port: port)
+                        self.localReady = true
                         continuation.resume(returning: URL(string: "http://127.0.0.1:\(port)")!)
                     } catch { continuation.resume(throwing: error) }
                 case .failed(let error):
@@ -353,7 +386,7 @@ final class IrohTransport {
                     self.status = "本地通道暂不可用"
                 case .cancelled:
                     self.localReady = false
-                    self.listenerReady?.resume(throwing: CancellationError()); self.listenerReady = nil
+                    self.listenerReady?.resume(throwing: PocketError.message("本地通道已中断。")); self.listenerReady = nil
                 case .waiting:
                     self.localReady = false
                 default: break
