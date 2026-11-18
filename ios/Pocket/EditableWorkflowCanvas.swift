@@ -448,10 +448,12 @@ struct WorkflowCanvasView: View {
     }
     private func command(_ name: String) { Task { await session.action("command", arguments: ["name": name]) } }
     private func receiveAsset(_ items: [NSItemProvider], _ point: CGPoint) -> Bool {
+        guard let provider = items.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.pocketCanvasAsset.identifier) }) else { return false }
         guard !importingAsset, !working, !submitting, session.loaded, !session.mutating, !session.textEditing,
-              canvasSize.width > 0, canvasSize.height > 0,
-              let provider = items.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.pocketCanvasAsset.identifier) })
-        else { return false }
+              canvasSize.width > 0, canvasSize.height > 0 else {
+            assetMessage = "画布正在编辑或保存，请稍后再拖入。"
+            return false
+        }
         let x = point.x / canvasSize.width, y = point.y / canvasSize.height
         importingAsset = true
         session.mutating = true
@@ -470,20 +472,23 @@ struct WorkflowCanvasView: View {
                         "media_kind": asset.isVideo ? "video" : "image"
                     ]]) as? String
                     if target == "reference" {
-                        assetMessage = "已交给参考图区处理"
-                    } else if target == "input" {
-                        guard store.pluginCapabilities.contains("canvas-assets") else {
-                            throw PocketError.message("更新电脑端 Pocket 插件后可导入。")
+                        assetMessage = "已交给节点处理，请查看节点内的结果。"
+                    } else {
+                        if target == "input" {
+                            guard store.pluginCapabilities.contains("canvas-assets") else {
+                                throw PocketError.message("更新电脑端 Pocket 插件后可导入。")
+                            }
+                            let value = try await api.importAsset(asset)
+                            guard store.client === api, store.canvasEditingSession === session else {
+                                throw PocketError.message("画布已切换，请重新拖放。")
+                            }
+                            _ = try await session.call("importAsset", arguments: ["token": token, "value": value])
+                        } else if target != "reference-added" {
+                            throw PocketError.message("资产未添加，请拖到支持此文件的输入区。")
                         }
-                        let value = try await api.importAsset(asset)
-                        guard store.client === api, store.canvasEditingSession === session else {
-                            throw PocketError.message("画布已切换，请重新拖放。")
-                        }
-                        _ = try await session.call("importAsset", arguments: ["token": token, "value": value])
                         await session.refreshScene()
-                        assetMessage = "已导入 \(asset.filename)"
                         session.mutating = false
-                        _ = await save()
+                        assetMessage = await save() ? "已导入 \(asset.filename)" : "已添加 \(asset.filename)，画布尚未保存。"
                     }
                 } catch {
                     assetMessage = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String ?? error.localizedDescription

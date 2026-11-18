@@ -265,7 +265,7 @@
   function assetInputWidget(node, kind, preferred) {
     if (!node || !["image", "video"].includes(kind)) return null;
     const native = {
-      LoadImage: ["image", "image"], LoadImageMask: ["image", "image"],
+      LoadImage: ["image", "image"], LoadImageMask: ["image", "image"], LoadImageGoohai: ["image", "image"],
       LoadVideo: ["video", "file"], VHS_LoadVideo: ["video", "video"],
       VHS_LoadVideoFFmpeg: ["video", "video"]
     }[node.comfyClass ?? node.type];
@@ -277,6 +277,56 @@
       return definition?.[1]?.[kind + "_upload"] === true || (native?.[0] === kind && native[1] === widget.name);
     });
     return eligible.includes(preferred) ? preferred : eligible.length === 1 ? eligible[0] : null;
+  }
+
+  function dropReferenceAsset(app, node, hit, asset, clientX, clientY) {
+    if (!hit || !app.canvasContainer?.contains(hit)) return null;
+    const nodeType = node?.comfyClass ?? node?.type;
+    const timeline = nodeType === "LazyH3Director" ? hit.closest(".pr-canvas") : null;
+    let zone = timeline ?? hit.closest(".bp-dropzone, .h3-refs-drop");
+    const domName = {
+      LazyMergeWorkbench: "lazy_merge_wb", LazyQwenWorkbench: "lazy_qwen_wb",
+      LazyKreaWorkbench: "lazy_krea_wb"
+    }[nodeType];
+    let media;
+    if (!zone && domName) {
+      const root = node.widgets?.find(widget => widget.name === domName)?.element;
+      if (root?.contains(hit)) {
+        // Lazy workbenches have an unclassed drop area. Its persistent hint
+        // remains the first child after thumbnails have been added.
+        for (let element = hit; element && element !== root; element = element.parentElement) {
+          if (element.firstElementChild?.textContent === "点击添加，或拖入本地/资产图片") {
+            zone = element;
+            media = node.widgets.find(widget => widget.name === "图片数据");
+            if (!media) throw new Error("参考图区尚未初始化，请稍后重试。");
+            break;
+          }
+        }
+      }
+    }
+    if (!zone) return null;
+    if (!timeline && asset.media_kind !== "image") throw new Error("这个参考图区只接收图片。");
+    const transfer = new DataTransfer();
+    transfer.setData("application/x-comfy-asset-info", JSON.stringify(asset));
+    const event = type => new DragEvent(type, {
+      dataTransfer: transfer, bubbles: true, cancelable: true, clientX, clientY
+    });
+    if (timeline) {
+      // The director uses the /view URI to recover the original asset and
+      // the native dragover handler to select its timeline position.
+      const { filename, subfolder, type } = asset;
+      transfer.setData("text/uri-list", "/view?" + new URLSearchParams({ filename, subfolder, type }));
+      zone.dispatchEvent(event("dragover"));
+    }
+    const drop = () => zone.dispatchEvent(event("drop"));
+    if (!media) {
+      if (drop()) throw new Error("此参考图区未接受拖放。");
+      return "reference";
+    }
+    const before = media.value;
+    change(app, () => { drop(); });
+    if (media.value === before) throw new Error("未添加图片。请检查参考图是否已达到张数上限，或更换图片格式。");
+    return "reference-added";
   }
 
   function moveMobileNode(app, id, x, y) {
@@ -401,7 +451,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
+    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, dropReferenceAsset, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -648,17 +698,12 @@
       const bounds = canvas.canvas.getBoundingClientRect();
       if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom)
         throw new Error("请把资产拖到画布中的文件节点。");
-      if (asset.media_kind === "image") {
-        const zone = document.elementFromPoint(clientX, clientY)?.closest(".bp-dropzone");
-        if (zone && app.canvasContainer?.contains(zone)) {
-          const transfer = new DataTransfer();
-          transfer.setData("application/x-comfy-asset-info", JSON.stringify(asset));
-          zone.dispatchEvent(new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true, clientX, clientY }));
-          return "reference";
-        }
-      }
+      const hit = document.elementFromPoint(clientX, clientY);
       const point = canvas.convertEventToCanvasOffset({ clientX, clientY });
-      const node = graph.getNodeOnPos(...point);
+      const domNodeID = hit?.closest("[data-node-id]")?.getAttribute("data-node-id");
+      const node = (domNodeID && nodeAt(graph, domNodeID)) || graph.getNodeOnPos(...point);
+      const reference = dropReferenceAsset(app, node, hit, asset, clientX, clientY);
+      if (reference) return reference;
       const widget = assetInputWidget(node, asset.media_kind, node?.getWidgetOnPos?.(...point));
       if (!widget) throw new Error("请拖到接收此类文件的加载节点或参考图区。");
       pendingAsset = { token, graph, node, widget, kind: asset.media_kind };

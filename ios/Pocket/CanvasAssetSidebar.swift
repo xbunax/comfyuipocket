@@ -90,7 +90,7 @@ struct CanvasAssetSidebar: View {
             if importing {
                 ProgressView("正在导入…").font(.caption).controlSize(.small)
             } else {
-                Text(message ?? "长按图片或视频，拖到画布中的加载节点。")
+                Text(message ?? "拖到兼容的加载节点，或将图片拖到节点的参考图区。")
                     .font(.caption2).foregroundStyle(PocketPalette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

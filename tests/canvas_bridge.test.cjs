@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { executionNode, applyPrompt, ports, connect, disconnect } = require('../ios/Pocket/CanvasBridge.js');
 const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
 const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
-const { assetInputWidget } = require('../ios/Pocket/CanvasBridge.js');
+const { assetInputWidget, dropReferenceAsset } = require('../ios/Pocket/CanvasBridge.js');
 
 test('asset drag updates only an unlinked file widget and exposes the imported file in its dropdown', async () => {
   const f = fixture();
@@ -18,6 +18,57 @@ test('asset drag updates only an unlinked file widget and exposes the imported f
   assert.deepEqual(f.transactions(), [1, 1]);
   f.source.inputs = [{ link: 7, widget: { name: 'file' } }];
   assert.equal(assetInputWidget(f.source, 'video'), null);
+});
+
+test('asset drag recognizes Lazy reference panels and the H3 timeline with the native drop formats', () => {
+  const previous = { DragEvent: globalThis.DragEvent, DataTransfer: globalThis.DataTransfer };
+  globalThis.DataTransfer = class extends Map { setData(type, value) { this.set(type, value); } };
+  globalThis.DragEvent = class { constructor(type, options) { Object.assign(this, options, {type}); } };
+  try {
+    const { app, source, transactions } = fixture();
+    const root = { contains: node => node === hit };
+    const image = { filename: '参考图.png', subfolder: 'Folder A', type: 'output', media_kind: 'image' };
+    const widget = { name: '图片数据', value: '[]' };
+    const zone = {
+      parentElement: root,
+      firstElementChild: { textContent: '点击添加，或拖入本地/资产图片' },
+      dispatchEvent(event) {
+        const data = JSON.parse(event.dataTransfer.get('application/x-comfy-asset-info'));
+        widget.value = JSON.stringify([data]);
+        return false;
+      }
+    };
+    const hit = { parentElement: zone, closest: () => null };
+    app.canvasContainer = root;
+    source.comfyClass = 'LazyMergeWorkbench';
+    source.widgets = [{ name: 'lazy_merge_wb', element: root }, widget];
+    assert.equal(dropReferenceAsset(app, source, hit, image, 20, 30), 'reference-added');
+    assert.deepEqual(JSON.parse(widget.value), [image]);
+    assert.deepEqual(transactions(), [1, 1]);
+    assert.throws(() => dropReferenceAsset(app, source, hit, image, 20, 30), /未添加图片/);
+    assert.throws(() => dropReferenceAsset(app, source, hit, {...image, media_kind: 'video'}, 20, 30), /只接收图片/);
+    assert.equal(dropReferenceAsset(app, source, { closest: () => zone }, image, 20, 30), null);
+
+    source.comfyClass = 'LazyH3Director';
+    hit.closest = selector => selector === '.pr-canvas' ? zone : null;
+    const events = [];
+    zone.dispatchEvent = event => { events.push(event); return false; };
+    const video = {...image, filename: 'video.mp4', media_kind: 'video'};
+    assert.equal(dropReferenceAsset(app, source, hit, video, 20, 30), 'reference');
+    assert.deepEqual(events.map(event => event.type), ['dragover', 'drop']);
+    const params = new URL(events[1].dataTransfer.get('text/uri-list'), 'http://localhost').searchParams;
+    assert.equal(params.get('type'), 'output');
+    assert.equal(params.get('subfolder'), 'Folder A');
+    assert.equal(params.get('filename'), 'video.mp4');
+    source.comfyClass = 'LoadImageGoohai';
+    source.widgets = [{ name: 'image', value: 'previous.png' }];
+    assert.equal(assetInputWidget(source, 'image'), source.widgets[0]);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete globalThis[name];
+      else globalThis[name] = value;
+    }
+  }
 });
 
 test('graph loading retries a displaced restore and verifies identity before applying inputs', async () => {
