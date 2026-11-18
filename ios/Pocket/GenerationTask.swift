@@ -1,5 +1,13 @@
 import Foundation
 
+enum BatchSeedMode: Equatable {
+    case preserve, afterFirst, everyRun
+
+    func randomizes(index: Int) -> Bool {
+        self == .everyRun || (self == .afterFirst && index > 0)
+    }
+}
+
 struct GenerationSubmission {
     var taskID: String? = nil
     var promptIDs: [String] = []

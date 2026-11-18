@@ -45,6 +45,10 @@ struct WorkflowCanvasView: View {
     @State private var submitting = false
     @State private var submissionStatus: String?
     @State private var latestPromptID: String?
+    @State private var latestTaskID: String?
+    @State private var showBatch = false
+    @State private var batchCount = 2
+    @State private var randomizeBatchSeeds = false
     @State private var showMismatch = false
     @State private var showNodes = false
     @State private var showPorts = false
@@ -58,6 +62,10 @@ struct WorkflowCanvasView: View {
     @State private var exporting = false
     @State private var exportDocument = WorkflowDocument(data: Data())
     private var workflow: Workflow? { store.workflows.first { $0.id == workflowID } }
+    private var canRun: Bool {
+        session.loaded && !session.mutating && !submitting && !store.busy && store.connected &&
+            !store.restoringConnection && store.connectionRecoveryError == nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -168,6 +176,11 @@ struct WorkflowCanvasView: View {
                 }
             }
             .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.displayAddress ?? "") }
+            .sheet(isPresented: $showBatch) {
+                BatchSettingsView(count: $batchCount, randomizeSeeds: $randomizeBatchSeeds) {
+                    Task { await run(count: batchCount, seeds: randomizeBatchSeeds ? .everyRun : .preserve) }
+                }
+            }
             .sheet(isPresented: $showWorkflows) {
                 NavigationStack {
                     List(store.workflows) { item in
@@ -219,6 +232,7 @@ struct WorkflowCanvasView: View {
                             }
                         }
                         Button("设置", systemImage: "gearshape") { showSettings = true }
+                        Button("批量运行", systemImage: "square.stack.3d.up") { showBatch = true }.disabled(!canRun)
                         Button("切换工作流", systemImage: "square.stack") { showWorkflows = true }
                         Group {
                         Button(session.showPanels ? "隐藏 ComfyUI 面板" : "显示 ComfyUI 面板", systemImage: "sidebar.left") {
@@ -282,9 +296,11 @@ struct WorkflowCanvasView: View {
                     Button { Task { await run() } } label: {
                         if submitting { ProgressView().controlSize(.small).frame(width: 44, height: 44) }
                         else { headerIcon("play.fill", prominent: true) }
-                    }.buttonStyle(.plain)
-                        .disabled(!session.loaded || submitting || store.busy)
+                    }.buttonStyle(CanvasRunButtonStyle(openBatch: { if canRun { showBatch = true } }))
+                        .disabled(!canRun)
                         .accessibilityLabel("运行当前画布").accessibilityIdentifier("canvas.run")
+                        .accessibilityHint("长按选择批量次数")
+                        .accessibilityAction(named: Text("批量运行")) { if canRun { showBatch = true } }
                         .keyboardShortcut(.return, modifiers: .command)
                 }
                 if !session.textEditing {
@@ -378,6 +394,18 @@ struct WorkflowCanvasView: View {
         }
     }
     private var runStatus: String? {
+        if submitting { return submissionStatus }
+        if let taskID = latestTaskID, let task = store.currentGenerationTasks.first(where: { $0.id == taskID }),
+           task.requestedCount > 1 {
+            let summary = task.summary(queue: store.queue, history: store.history)
+            let count = "\(summary.finished)/\(task.requestedCount)"
+            if summary.running > 0 { return "批量生成中 · \(count)" }
+            if summary.pending > 0 { return "批量已排队 · \(count)" }
+            if summary.finished == task.items.count && summary.finished > 0 {
+                return summary.completed == task.requestedCount ? "批量完成 · \(count)" : "批量已结束 · \(summary.completed) 次成功"
+            }
+            return submissionStatus
+        }
         guard let id = latestPromptID else { return submissionStatus }
         if store.activePrompt == id { return "生成中 · \(Int(store.progress * 100))%" }
         switch store.history[id]["status"]["status_str"].text {
@@ -397,14 +425,18 @@ struct WorkflowCanvasView: View {
         if !saved, session.error == nil { session.error = "节点仍在更新，请完成当前操作后重试。" }
         return saved
     }
-    private func run() async {
-        guard !submitting else { return }
+    private func run(count: Int = 1, seeds: BatchSeedMode = .preserve) async {
+        guard canRun else { return }
         submitting = true; submissionStatus = "正在保存并提交…"
+        latestPromptID = nil; latestTaskID = nil
         defer { submitting = false }
         guard await saveForAction(), let workflow = self.workflow else { submissionStatus = "提交未完成"; return }
-        let result = await store.enqueue(workflow)
+        let result = await store.enqueue(workflow, count: count, seeds: seeds)
         if let error = result.error { session.error = error }
-        if let id = result.promptIDs.first { latestPromptID = id; submissionStatus = "已排队 · \(id.prefix(8))" }
+        if let id = result.promptIDs.first {
+            latestPromptID = id; latestTaskID = result.taskID
+            submissionStatus = count > 1 ? "已提交 \(result.promptIDs.count)/\(count) 次生成" : "已排队 · \(id.prefix(8))"
+        }
         else { submissionStatus = "提交失败" }
     }
     private func zoomButton(_ icon: String, _ title: String, factor: Double) -> some View {
@@ -474,6 +506,23 @@ struct WorkflowCanvasView: View {
             if let workflow = self.workflow { session.remember(workflow) }
             return true
         } catch { session.error = error.localizedDescription; return false }
+    }
+}
+
+private struct CanvasRunButtonStyle: PrimitiveButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    let openBatch: () -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .gesture(LongPressGesture(minimumDuration: 0.45).exclusively(before: TapGesture()).onEnded { result in
+                guard enabled else { return }
+                switch result {
+                case .first: openBatch()
+                case .second: configuration.trigger()
+                }
+            })
+            .accessibilityAction { if enabled { configuration.trigger() } }
     }
 }
 

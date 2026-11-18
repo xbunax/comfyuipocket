@@ -439,11 +439,36 @@ struct WorkflowEditor: View {
     private func openCanvas() { if let onOpenCanvas { onOpenCanvas() } else { showCanvas = true } }
 }
 
-private struct BatchSettingsView: View {
+struct BatchSettingsView: View {
     @Binding var count: Int
     @Binding var randomizeSeeds: Bool
+    var submit: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
     @ScaledMetric(relativeTo: .body) private var sheetHeight: CGFloat = 240
     var body: some View {
+        if let submit {
+            ScrollView {
+                VStack(spacing: 18) {
+                    settings
+                    Button {
+                        dismiss()
+                        submit()
+                    } label: {
+                        Label("提交 \(count) 次生成", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity).padding(.vertical, 5)
+                    }.buttonStyle(.glassProminent)
+                        .accessibilityIdentifier("canvas.batchSubmit")
+                }.padding(24)
+            }
+            .presentationDetents([.height(sheetHeight + 64), .large])
+            .presentationDragIndicator(.visible)
+        } else {
+            VStack(spacing: 18) { settings }.padding(24)
+                .presentationDetents([.height(sheetHeight)])
+                .presentationDragIndicator(.visible)
+        }
+    }
+    private var settings: some View {
         VStack(spacing: 18) {
             HStack {
                 Text("批量次数").font(.headline)
@@ -454,11 +479,9 @@ private struct BatchSettingsView: View {
             Slider(value: Binding(get: { Double(count) }, set: { count = Int($0.rounded()) }), in: 1...20, step: 1)
                 .accessibilityLabel("批量生成次数").accessibilityValue("\(count) 次")
             HStack { Text("1"); Spacer(); Text("20") }.font(.caption).foregroundStyle(PocketPalette.secondary)
-            Toggle("后续生成随机种子", isOn: $randomizeSeeds)
+            Toggle(submit == nil ? "后续生成随机种子" : "每次生成随机 Seed", isOn: $randomizeSeeds)
                 .font(.subheadline).accessibilityIdentifier("batchRandomizeSeeds")
-        }.padding(24)
-            .presentationDetents([.height(sheetHeight)])
-            .presentationDragIndicator(.visible)
+        }
     }
 }
 

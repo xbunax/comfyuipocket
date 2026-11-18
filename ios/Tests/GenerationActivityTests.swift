@@ -6,6 +6,12 @@ import XCTest
 #endif
 
 final class GenerationActivityTests: XCTestCase {
+    func testBatchSeedModeCanRandomizeTheFirstRun() {
+        let indices = Array(0..<3)
+        XCTAssertEqual(indices.filter { BatchSeedMode.preserve.randomizes(index: $0) }, [])
+        XCTAssertEqual(indices.filter { BatchSeedMode.afterFirst.randomizes(index: $0) }, [1, 2])
+        XCTAssertEqual(indices.filter { BatchSeedMode.everyRun.randomizes(index: $0) }, [0, 1, 2])
+    }
     private func batch() -> GenerationTask {
         GenerationTask(id: "one", server: "server", workflowID: "workflow", name: "Workflow",
                        createdAt: 0, requestedCount: 2, items: [

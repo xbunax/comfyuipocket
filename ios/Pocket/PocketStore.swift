@@ -470,10 +470,10 @@ final class PocketStore {
                                     activePrompt: activePrompt, progress: progress)
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
-        let result = await enqueue(workflow, count: count, randomizeSeeds: randomizeSeeds)
+        let result = await enqueue(workflow, count: count, seeds: randomizeSeeds ? .afterFirst : .preserve)
         if let message = result.error { error = message }
     }
-    func enqueue(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async -> GenerationSubmission {
+    func enqueue(_ workflow: Workflow, count: Int = 1, seeds: BatchSeedMode = .preserve) async -> GenerationSubmission {
         guard let api = client, connected else { return GenerationSubmission(error: "服务器尚未连接。") }
         guard !busy else { return GenerationSubmission(error: "其他任务正在提交，请稍后重试。") }
         guard !workflow.prompt.isEmpty else { return GenerationSubmission(error: "画布中还没有可执行节点，请先添加并连接节点。") }
@@ -497,7 +497,7 @@ final class PocketStore {
             for index in 0..<total {
                 guard client === api else { throw PocketError.message("服务器连接已改变，后续生成未提交。") }
                 var submitted = workflow
-                if randomizeSeeds && index > 0 { submitted.randomizeSeeds() }
+                if seeds.randomizes(index: index) { submitted.randomizeSeeds() }
                 let reply = try await api.json("prompt", method: "POST", body: .object([
                     "prompt": .object(submitted.prompt), "client_id": .string(api.clientID),
                     "extra_data": .object(["pocket_task": .object([
