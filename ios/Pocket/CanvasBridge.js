@@ -270,11 +270,16 @@
       VHS_LoadVideoFFmpeg: ["video", "video"]
     }[node.comfyClass ?? node.type];
     const inputs = node.constructor?.nodeData?.input;
-    const eligible = (node.widgets ?? []).filter(widget => {
-      if (typeof widget.value !== "string" || widget.hidden || widget.disabled ||
-          node.inputs?.some(i => i.link != null && i.widget?.name === widget.name)) return false;
+    const fields = (node.widgets ?? []).filter(widget =>
+      typeof widget.value === "string" && widget.type !== "button" && widget.options?.serialize !== false &&
+      !widget.hidden && !widget.disabled && !node.inputs?.some(i => i.link != null && i.widget?.name === widget.name)
+    );
+    // ComfyUI can mark its upload button as a file widget too. For loaders
+    // with a known execution field, target that field from anywhere on the node.
+    if (native) return native[0] === kind ? (fields.find(widget => widget.name === native[1]) ?? null) : null;
+    const eligible = fields.filter(widget => {
       const definition = inputs?.required?.[widget.name] ?? inputs?.optional?.[widget.name];
-      return definition?.[1]?.[kind + "_upload"] === true || (native?.[0] === kind && native[1] === widget.name);
+      return definition?.[1]?.[kind + "_upload"] === true;
     });
     return eligible.includes(preferred) ? preferred : eligible.length === 1 ? eligible[0] : null;
   }

@@ -1,5 +1,4 @@
-ComfyUI Pocket v0.17.2
+ComfyUI Pocket v0.17.3
 
-- Receive canvas asset drops directly in the app and report accepted, cancelled, and failed imports.
-- Tap an asset and then tap a compatible node or reference area to insert it without a drag gesture.
-- Drop images on the body of a Lazy Merge, Qwen, or Krea workbench to add them to its reference area.
+- Route imports onto the actual file field when a Load Image or Load Video node also exposes an upload button.
+- Accept selected assets from the loader title, controls, and preview.

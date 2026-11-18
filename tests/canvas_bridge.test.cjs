@@ -20,6 +20,24 @@ test('asset drag updates only an unlinked file widget and exposes the imported f
   assert.equal(assetInputWidget(f.source, 'video'), null);
 });
 
+test('Load Image resolves its file input even when the upload button advertises image_upload', async () => {
+  const f = fixture();
+  const image = { name: 'image', type: 'combo', value: 'previous.png', options: { values: ['previous.png'] } };
+  const upload = { name: 'upload', type: 'button', value: 'choose file to upload', options: { serialize: false } };
+  const preview = { name: '$$canvas-image-preview', type: 'custom', value: '', options: { serialize: false } };
+  f.source.comfyClass = 'LoadImage';
+  f.source.constructor = { nodeData: { input: { required: { upload: ['IMAGEUPLOAD', { image_upload: true }] } } } };
+  f.source.widgets = [image, upload, preview];
+  for (const preferred of [undefined, upload, preview]) {
+    assert.equal(assetInputWidget(f.source, 'image', preferred), image);
+  }
+  await setMobileWidget(f.app, 1, 0, 'pocket-import.png', 'image', true);
+  assert.equal(image.value, 'pocket-import.png');
+  assert.equal(upload.value, 'choose file to upload');
+  f.source.inputs = [{ link: 7, widget: { name: 'image' } }];
+  assert.equal(assetInputWidget(f.source, 'image', upload), null);
+});
+
 test('asset drag recognizes Lazy reference panels and the H3 timeline with the native drop formats', () => {
   const previous = { DragEvent: globalThis.DragEvent, DataTransfer: globalThis.DataTransfer };
   globalThis.DataTransfer = class extends Map { setData(type, value) { this.set(type, value); } };
