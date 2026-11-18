@@ -8,6 +8,9 @@ final class PocketStore {
     var irohTransport: IrohTransport?
     var incomingPairingCode: String?
     var connected = false
+    var restoringConnection = false
+    @ObservationIgnored private var suspended = false
+    @ObservationIgnored private var recovery: Task<Void, Never>?
     var connecting = false
     var socketConnected = false
     var error: String?
@@ -258,6 +261,7 @@ final class PocketStore {
             _ = try await next.json("system_stats")
             guard lastConnection == attempt else { return }
             client = next; connected = true; save()
+            if suspended { irohTransport?.suspendMonitoring() }
             startEvents(next)
             await refresh()
             do { nodeInfo = try await next.json("object_info") } catch { self.notice = "节点元信息暂不可用，仍可编辑已有参数。" }
@@ -279,6 +283,7 @@ final class PocketStore {
     }
     func disconnect() {
         lastConnection = UUID(); connecting = false
+        recovery?.cancel(); recovery = nil; restoringConnection = false
         events?.cancel(); events = nil; polling?.cancel(); polling = nil
         syncLoop?.cancel(); syncLoop = nil; pushTask?.cancel(); pushTask = nil
         client?.disconnect(); client = nil; connected = false; socketConnected = false
@@ -289,6 +294,7 @@ final class PocketStore {
         pluginCapabilities = []
     }
     private func startEvents(_ api: ComfyClient) {
+        guard !suspended, client === api else { return }
         events?.cancel()
         events = Task { [weak self] in
             await api.listen(event: { [weak self] event in self?.handle(event) },
@@ -313,14 +319,55 @@ final class PocketStore {
         }
     }
     func resume() async {
+        guard suspended else { return }
+        suspended = false
         guard connected, let client else { return }
-        irohTransport?.resumeMonitoring()
+        if let transport = irohTransport {
+            restoreP2P(client, transport: transport)
+            return
+        }
         startEvents(client); await refresh(); await syncNow()
     }
     func suspend() {
+        suspended = true
+        recovery?.cancel(); recovery = nil
         irohTransport?.suspendMonitoring()
         events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
         client?.disconnect(); socketConnected = false
+    }
+    private func restoreP2P(_ api: ComfyClient, transport: IrohTransport) {
+        guard !suspended, recovery == nil, client === api else { return }
+        restoringConnection = true
+        notice = nil
+        if pluginAvailable { syncStatus = "直连恢复后自动同步" }
+        events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
+        transport.suspendMonitoring()
+        recovery = Task { [weak self] in
+            var rebuild = false
+            var delay = 1
+            while let self, !Task.isCancelled, self.client === api, !self.suspended {
+                do {
+                    try await transport.prepareToResume(rebuild: rebuild)
+                    try Task.checkCancellation()
+                    api.renewSession()
+                    try await api.probeServer()
+                    try Task.checkCancellation()
+                    guard self.client === api, !self.suspended else { return }
+                    self.recovery = nil
+                    self.restoringConnection = false
+                    transport.didRestoreServerAccess()
+                    self.startEvents(api)
+                    await self.refresh()
+                    await self.syncNow()
+                    return
+                } catch {
+                    guard !Task.isCancelled, self.client === api, !self.suspended else { return }
+                    rebuild = true
+                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                    delay = min(delay * 2, 15)
+                }
+            }
+        }
     }
     private func handle(_ event: JSONValue) {
         let d = event["data"]
@@ -338,16 +385,23 @@ final class PocketStore {
         }
     }
     func refresh() async {
-        guard let api = client else { return }
+        guard !suspended, !restoringConnection, let api = client else { return }
         do {
             let q = try await api.json("queue")
             let h = try await api.json("history", query: [.init(name: "max_items", value: "200")])
-            guard client === api else { return }
+            guard !suspended, !restoringConnection, !Task.isCancelled, client === api else { return }
             if let transport = irohTransport, profile.irohPeer != transport.peer { profile.irohPeer = transport.peer; save() }
             try mergeMedia(h, server: api.serverID)
             queue = q; history = currentMediaArchive.visibleHistory(h)
             restoreGenerationTasks(server: api.serverID)
-        } catch { if client === api { notice = "刷新失败：\(error.localizedDescription)" } }
+        } catch {
+            guard !suspended, !restoringConnection, !Task.isCancelled, client === api else { return }
+            if let transport = irohTransport, (error as? URLError)?.code == .cannotConnectToHost {
+                restoreP2P(api, transport: transport)
+            } else {
+                notice = "刷新失败：\(error.localizedDescription)"
+            }
+        }
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
         let result = await enqueue(workflow, count: count, randomizeSeeds: randomizeSeeds)
@@ -507,7 +561,7 @@ final class PocketStore {
         save(); saveSyncState(); touch(copy.id)
     }
     func syncNow() async {
-        guard let api = client, connected, pluginAvailable, !syncing else { return }
+        guard let api = client, connected, pluginAvailable, !syncing, !suspended, !restoringConnection else { return }
         syncing = true; defer { syncing = false }
         syncStatus = "正在自动同步"
         do { try await flushPendingDeletes(api) } catch { recordSyncError(error) }
@@ -561,7 +615,7 @@ final class PocketStore {
         } catch { recordSyncError(error) }
     }
     private func pushNow() async {
-        guard let api = client, connected, pluginAvailable, !syncing else { return }
+        guard let api = client, connected, pluginAvailable, !syncing, !suspended, !restoringConnection else { return }
         syncing = true; defer { syncing = false }
         do {
             try await flushPendingDeletes(api)
@@ -602,6 +656,7 @@ final class PocketStore {
         }
     }
     private func recordSyncError(_ error: Error) {
+        guard !Task.isCancelled, !suspended, !restoringConnection else { return }
         syncStatus = "同步暂不可用"
         let message = error.localizedDescription
         guard lastSyncError != message else { return }

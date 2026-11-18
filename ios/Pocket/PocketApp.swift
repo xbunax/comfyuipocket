@@ -112,8 +112,13 @@ struct PocketConnectionSummary: View {
 struct ConnectionBadge: View {
     @Environment(PocketStore.self) private var store
     var body: some View {
-        Label(store.connected ? (store.socketConnected ? "已连接 · 实时" : "已连接 · 重连实时通道") : "尚未连接", systemImage: store.connected ? "circle.fill" : "circle")
-            .font(.caption).foregroundStyle(store.connected ? .green : .secondary)
+        if store.restoringConnection {
+            Label("正在恢复服务器连接…", systemImage: "arrow.clockwise")
+                .font(.caption).foregroundStyle(.orange)
+        } else {
+            Label(store.connected ? (store.socketConnected ? "已连接 · 实时" : "已连接 · 重连实时通道") : "尚未连接", systemImage: store.connected ? "circle.fill" : "circle")
+                .font(.caption).foregroundStyle(store.connected ? .green : .secondary)
+        }
     }
 }
 

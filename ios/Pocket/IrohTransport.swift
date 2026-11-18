@@ -47,6 +47,7 @@ final class IrohTransport {
     @ObservationIgnored private var connecting: Task<IrohLib.Connection, Error>?
     @ObservationIgnored private var monitor: Task<Void, Never>?
     @ObservationIgnored private var listener: NWListener?
+    @ObservationIgnored private var localReady = false
     @ObservationIgnored private var listenerReady: CheckedContinuation<URL, Error>?
     @ObservationIgnored private var channels: [UUID: (NWConnection, Task<Void, Never>)] = [:]
     @ObservationIgnored private var stopped = false
@@ -79,9 +80,7 @@ final class IrohTransport {
         speedTest.clear()
         enrollmentToken = nil
         stopped = true; monitor?.cancel(); monitor = nil; connecting?.cancel(); connecting = nil
-        listenerReady?.resume(throwing: CancellationError()); listenerReady = nil
-        listener?.cancel(); listener = nil
-        for (_, (socket, task)) in channels { task.cancel(); socket.cancel() }; channels.removeAll()
+        closeListener()
         try? connection?.close(errorCode: 0, reason: Data("disconnected".utf8)); connection = nil
         if let endpoint { Task { try? await endpoint.close() } }; endpoint = nil
         if let cookie { Task { await WKWebsiteDataStore.default().httpCookieStore.delete(cookie) } }; cookie = nil
@@ -92,6 +91,40 @@ final class IrohTransport {
         speedTest.cancel()
         monitor?.cancel()
         monitor = nil
+    }
+
+    // Keep the same loopback address and authorization for already-open web views.
+    func prepareToResume(rebuild: Bool) async throws {
+        try Task.checkCancellation()
+        guard !stopped else { throw CancellationError() }
+        if rebuild || !localReady {
+            status = "正在恢复本地通道…"
+            closeListener()
+            _ = try await startListener()
+        }
+        try Task.checkCancellation()
+        if rebuild, let connection {
+            speedTest.clear()
+            try? connection.close(errorCode: 1, reason: Data("foreground recovery".utf8))
+            self.connection = nil
+        }
+        _ = try await ensureConnection()
+    }
+
+    func didRestoreServerAccess() {
+        status = "已直连 · 已禁用中继"
+        resumeMonitoring()
+    }
+
+    private func closeListener() {
+        localReady = false
+        listenerReady?.resume(throwing: CancellationError())
+        listenerReady = nil
+        let previous = listener
+        listener = nil
+        previous?.cancel()
+        for (_, (socket, task)) in channels { task.cancel(); socket.cancel() }
+        channels.removeAll()
     }
 
     private func bindEndpoint() async throws -> Endpoint {
@@ -283,38 +316,63 @@ final class IrohTransport {
 
     private func startListener() async throws -> URL {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
-        let listener = try NWListener(using: parameters)
+        parameters.allowLocalEndpointReuse = true
+        let port = access.flatMap { NWEndpoint.Port(rawValue: $0.port) } ?? .any
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port)
+        let listener = try NWListener(using: parameters, on: port)
         self.listener = listener
-        listener.newConnectionHandler = { [weak self] socket in
+        listener.newConnectionHandler = { [weak self, weak listener] socket in
             Task { @MainActor in
-                guard let self, !self.stopped, self.channels.count < 64 else { socket.cancel(); return }
+                guard let self, let listener, self.listener === listener, !self.stopped,
+                      self.channels.count < 64 else { socket.cancel(); return }
                 let id = UUID()
                 socket.start(queue: .main)
                 let task = Task { @MainActor in await self.serve(socket); self.channels[id] = nil }
                 self.channels[id] = (socket, task)
             }
         }
-        listener.stateUpdateHandler = { [weak self] state in
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, let listener, self.listener === listener else { return }
                 switch state {
                 case .ready:
-                    guard let port = listener.port?.rawValue, let continuation = self.listenerReady else { return }
+                    self.localReady = true
+                    guard let continuation = self.listenerReady else { return }
                     self.listenerReady = nil
                     do {
-                        self.access = LoopbackAccess(token: try Self.randomToken(), port: port)
+                        guard let port = listener.port?.rawValue else { throw PocketError.message("本地通道没有可用端口。") }
+                        if let access = self.access, access.port != port {
+                            throw PocketError.message("本地通道未能恢复原端口。")
+                        }
+                        if self.access == nil { self.access = LoopbackAccess(token: try Self.randomToken(), port: port) }
                         continuation.resume(returning: URL(string: "http://127.0.0.1:\(port)")!)
                     } catch { continuation.resume(throwing: error) }
                 case .failed(let error):
+                    self.localReady = false
                     self.listenerReady?.resume(throwing: error); self.listenerReady = nil
-                    self.status = "本地通道异常，请重新连接"
+                    self.status = "本地通道暂不可用"
+                case .cancelled:
+                    self.localReady = false
+                    self.listenerReady?.resume(throwing: CancellationError()); self.listenerReady = nil
+                case .waiting:
+                    self.localReady = false
                 default: break
                 }
             }
         }
-        return try await withCheckedThrowingContinuation { continuation in
-            listenerReady = continuation; listener.start(queue: .main)
+        do {
+            return try await PairingDeadline<URL>.run(5, timeoutMessage: "本地通道启动超时。") {
+                try await withCheckedThrowingContinuation { continuation in
+                    guard self.listener === listener, !Task.isCancelled else {
+                        continuation.resume(throwing: CancellationError()); return
+                    }
+                    self.listenerReady = continuation
+                    listener.start(queue: .main)
+                }
+            }
+        } catch {
+            if self.listener === listener { closeListener() }
+            throw error
         }
     }
 

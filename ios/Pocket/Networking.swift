@@ -7,7 +7,7 @@ final class ComfyClient {
     let loopbackAccess: LoopbackAccess?
     let displayAddress: String
     let clientID = UUID().uuidString
-    private let session: URLSession
+    private var session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var sizeCache: [String: (bytes: Int64?, expires: Date)] = [:]
     private var pendingSizes: [String: Task<Int64?, Never>] = [:]
@@ -64,6 +64,20 @@ final class ComfyClient {
     func hardwareJSON(_ path: String) async throws -> JSONValue {
         var r = try request(path); r.timeoutInterval = 3; r.cachePolicy = .reloadIgnoringLocalCacheData
         return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
+    }
+    func probeServer() async throws {
+        var request = try request("system_stats")
+        request.timeoutInterval = 6
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        _ = try JSONDecoder().decode(JSONValue.self, from: await checked(request))
+    }
+    func renewSession() {
+        disconnect()
+        let old = session
+        session = URLSession(configuration: old.configuration)
+        old.invalidateAndCancel()
+        for task in pendingSizes.values { task.cancel() }
+        pendingSizes.removeAll()
     }
     func outputDirectory(folder: String, offset: Int, sort: String, ascending: Bool) async throws -> OutputDirectoryPage {
         let data = try await checked(request("pocket/v1/outputs", query: [
@@ -167,13 +181,16 @@ final class ComfyClient {
     func listen(event: @escaping @MainActor (JSONValue) -> Void, preview: @escaping @MainActor (Data) -> Void, state: @escaping @MainActor (Bool) -> Void) async {
         var delay: UInt64 = 1
         while !Task.isCancelled {
+            var attempt: URLSessionWebSocketTask?
             do {
                 var r = try request("ws", query: [.init(name: "clientId", value: clientID)])
                 var c = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
                 c.scheme = c.scheme == "https" ? "wss" : "ws"; r.url = c.url
-                let ws = session.webSocketTask(with: r); socket = ws; ws.resume()
+                let ws = session.webSocketTask(with: r)
+                attempt = ws; socket = ws; ws.resume()
                 while !Task.isCancelled {
                     let message = try await ws.receive()
+                    guard !Task.isCancelled, socket === ws else { break }
                     state(true); delay = 1
                     switch message {
                     case .string(let text): if let v = try? JSONDecoder().decode(JSONValue.self, from: Data(text.utf8)) { event(v) }
@@ -183,8 +200,11 @@ final class ComfyClient {
                     @unknown default: break
                     }
                 }
-            } catch { state(false) }
-            socket?.cancel(with: .goingAway, reason: nil); socket = nil
+            } catch {
+                if !Task.isCancelled, socket === attempt { state(false) }
+            }
+            attempt?.cancel(with: .goingAway, reason: nil)
+            if socket === attempt { socket = nil }
             if Task.isCancelled { break }
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             delay = min(delay * 2, 15)
