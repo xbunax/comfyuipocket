@@ -152,7 +152,7 @@ struct WorkflowCanvasView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.serverID ?? "") }
+            .sheet(isPresented: $showHardware) { CanvasHardwareDetails(hardware: hardware, server: store.client?.displayAddress ?? "") }
             .sheet(isPresented: $showWorkflows) {
                 NavigationStack {
                     List(store.workflows) { item in
@@ -224,19 +224,28 @@ struct WorkflowCanvasView: View {
                             }
                         }
                         }.disabled(!session.available)
-                    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.disabled(submitting).buttonStyle(.glass).accessibilityLabel("画布菜单")
+                    } label: { headerIcon("ellipsis") }.disabled(submitting).buttonStyle(.plain).accessibilityLabel("画布菜单")
+    }
+    private func headerIcon(_ name: String, prominent: Bool = false) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(prominent ? .black : PocketPalette.text)
+            .frame(width: 34, height: 34)
+            .glassEffect(.regular.tint(prominent ? PocketPalette.accent : nil).interactive(), in: .rect(cornerRadius: 11))
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
     private var header: some View {
-        GlassEffectContainer(spacing: 10) {
-            VStack(spacing: 3) {
-                HStack(spacing: 8) {
+        GlassEffectContainer(spacing: 4) {
+            VStack(spacing: 2) {
+                HStack(spacing: 2) {
                     Button {
                         Task {
                             if !session.loaded { finish(); return }
                             if await saveForAction() { finish() }
                         }
-                    } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
-                        .buttonStyle(.glass).disabled(working || submitting).accessibilityLabel("返回工作台")
+                    } label: { headerIcon("chevron.left") }
+                        .buttonStyle(.plain).disabled(working || submitting).accessibilityLabel("返回工作台")
                     Button { showWorkflows = true } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 4) {
@@ -249,28 +258,21 @@ struct WorkflowCanvasView: View {
                             }.font(.caption2).foregroundStyle(PocketPalette.secondary)
                         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("切换工作流")
-                        .frame(maxWidth: layout.showsCanvasInspector ? 340 : .infinity)
                         .disabled(submitting || working)
-                    if layout.showsCanvasInspector {
-                        Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }
-                            .buttonStyle(.plain).padding(.horizontal, 12)
-                    }
                     canvasMenu
                     Button { Task { await run() } } label: {
-                        Group {
-                            if submitting { ProgressView().controlSize(.small) }
-                            else { Label("运行", systemImage: "play.fill").font(.subheadline.bold()).fixedSize() }
-                        }.frame(minWidth: 44, minHeight: 30)
-                    }.buttonStyle(.glassProminent).buttonBorderShape(.capsule)
+                        if submitting { ProgressView().controlSize(.small).frame(width: 44, height: 44) }
+                        else { headerIcon("play.fill", prominent: true) }
+                    }.buttonStyle(.plain)
                         .disabled(!session.loaded || submitting || store.busy)
                         .accessibilityLabel("运行当前画布").accessibilityIdentifier("canvas.run")
                         .keyboardShortcut(.return, modifiers: .command)
                 }
-                if !layout.showsCanvasInspector {
-                    Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware, compact: true) }
-                        .buttonStyle(.plain).padding(.horizontal, 6)
+                if !session.textEditing {
+                    Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }
+                        .buttonStyle(.plain)
                 }
-            }.padding(.horizontal, 12).padding(.vertical, 4)
+            }.padding(.horizontal, 9).padding(.vertical, 2)
         }
     }
     private var controls: some View {

@@ -59,3 +59,28 @@ struct GenerationSummary {
         return "已完成"
     }
 }
+
+struct GenerationActivityState {
+    let units: Int64
+    let terminal: Bool
+    let succeeded: Bool
+    let subtitle: String
+
+    init(task: GenerationTask, summary: GenerationSummary, activePrompt: String, progress: Double) {
+        terminal = !task.submitting && !summary.active && summary.finished == task.items.count
+        succeeded = terminal && summary.completed == task.requestedCount && task.submissionError == nil
+        let sampling = !terminal && progress.isFinite && task.items.contains { $0.id == activePrompt }
+        let nodePercent = sampling ? Int(min(0.99, max(0, progress)) * 100) : 0
+        units = Int64(summary.finished * 100 + nodePercent)
+        let count = "\(summary.completed)/\(task.requestedCount)"
+        if terminal {
+            subtitle = succeeded ? "已完成 \(count)" : "已结束 · 成功 \(count)"
+        } else if task.submitting {
+            subtitle = "已提交 \(task.items.count)/\(task.requestedCount)"
+        } else if sampling {
+            subtitle = "已完成 \(count) · 当前节点 \(nodePercent)%"
+        } else {
+            subtitle = "\(summary.label) · 已完成 \(count)"
+        }
+    }
+}

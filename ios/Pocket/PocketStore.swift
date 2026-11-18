@@ -10,6 +10,8 @@ final class PocketStore {
     var connected = false
     var restoringConnection = false
     @ObservationIgnored private var suspended = false
+    @ObservationIgnored private let generationActivities = GenerationActivities()
+    private var canMonitorServer: Bool { !suspended || generationActivities.hasBackgroundExecution }
     @ObservationIgnored private var recovery: Task<Void, Never>?
     var connecting = false
     var socketConnected = false
@@ -287,6 +289,7 @@ final class PocketStore {
         events?.cancel(); events = nil; polling?.cancel(); polling = nil
         syncLoop?.cancel(); syncLoop = nil; pushTask?.cancel(); pushTask = nil
         client?.disconnect(); client = nil; connected = false; socketConnected = false
+        generationActivities.stop()
         irohTransport?.stop(); irohTransport = nil
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
         preview = nil; progress = 0; activeNode = ""; activePrompt = ""
@@ -294,11 +297,11 @@ final class PocketStore {
         pluginCapabilities = []
     }
     private func startEvents(_ api: ComfyClient) {
-        guard !suspended, client === api else { return }
+        guard canMonitorServer, client === api else { return }
         events?.cancel()
         events = Task { [weak self] in
             await api.listen(event: { [weak self] event in self?.handle(event) },
-                             preview: { [weak self] data in self?.preview = data },
+                             preview: { [weak self] data in if let self, !self.suspended { self.preview = data } },
                              state: { [weak self] state in self?.socketConnected = state })
         }
         polling?.cancel()
@@ -310,6 +313,7 @@ final class PocketStore {
             }
         }
         syncLoop?.cancel()
+        guard !suspended else { return }
         syncLoop = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(10))
@@ -330,13 +334,24 @@ final class PocketStore {
     }
     func suspend() {
         suspended = true
+        syncLoop?.cancel(); pushTask?.cancel()
+        updateBackgroundExecution()
+    }
+    private func updateBackgroundExecution() {
+        guard suspended, let api = client else { return }
+        if generationActivities.hasBackgroundExecution {
+            guard events == nil || events?.isCancelled == true else { return }
+            if let transport = irohTransport { restoreP2P(api, transport: transport) }
+            else { startEvents(api); Task { await refresh() } }
+            return
+        }
         recovery?.cancel(); recovery = nil
         irohTransport?.suspendMonitoring()
-        events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
+        events?.cancel(); polling?.cancel()
         client?.disconnect(); socketConnected = false
     }
     private func restoreP2P(_ api: ComfyClient, transport: IrohTransport) {
-        guard !suspended, recovery == nil, client === api else { return }
+        guard canMonitorServer, recovery == nil, client === api else { return }
         restoringConnection = true
         notice = nil
         if pluginAvailable { syncStatus = "直连恢复后自动同步" }
@@ -345,14 +360,14 @@ final class PocketStore {
         recovery = Task { [weak self] in
             var rebuild = false
             var delay = 1
-            while let self, !Task.isCancelled, self.client === api, !self.suspended {
+            while let self, !Task.isCancelled, self.client === api, self.canMonitorServer {
                 do {
                     try await transport.prepareToResume(rebuild: rebuild)
                     try Task.checkCancellation()
                     api.renewSession()
                     try await api.probeServer()
                     try Task.checkCancellation()
-                    guard self.client === api, !self.suspended else { return }
+                    guard self.client === api, self.canMonitorServer else { return }
                     self.recovery = nil
                     self.restoringConnection = false
                     transport.didRestoreServerAccess()
@@ -361,7 +376,7 @@ final class PocketStore {
                     await self.syncNow()
                     return
                 } catch {
-                    guard !Task.isCancelled, self.client === api, !self.suspended else { return }
+                    guard !Task.isCancelled, self.client === api, self.canMonitorServer else { return }
                     rebuild = true
                     do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                     delay = min(delay * 2, 15)
@@ -372,36 +387,46 @@ final class PocketStore {
     private func handle(_ event: JSONValue) {
         let d = event["data"]
         switch event["type"].text {
-        case "execution_start": activePrompt = d["prompt_id"].text; progress = 0; preview = nil
-        case "progress": progress = d["max"].double > 0 ? min(1, d["value"].double / d["max"].double) : 0
+        case "execution_start":
+            activePrompt = d["prompt_id"].text; progress = 0; preview = nil
+            updateGenerationActivities()
+        case "progress":
+            if let prompt = d["prompt_id"].text.nonEmpty { activePrompt = prompt }
+            progress = d["max"].double > 0 ? min(1, d["value"].double / d["max"].double) : 0
+            updateGenerationActivities()
         case "executing":
             activeNode = d["node"].text
             if d["node"] == .null { progress = 1; activePrompt = ""; Task { await refresh() } }
         case "execution_error":
             error = "节点 \(d["node_id"].text)：\(d["exception_message"].text)"; activePrompt = ""; Task { await refresh() }
         case "execution_interrupted": activePrompt = ""; progress = 0; Task { await refresh() }
-        case "executed", "status": Task { await refresh() }
+        case "executed", "execution_success", "status": Task { await refresh() }
         default: break
         }
     }
     func refresh() async {
-        guard !suspended, !restoringConnection, let api = client else { return }
+        guard canMonitorServer, !restoringConnection, let api = client else { return }
         do {
             let q = try await api.json("queue")
             let h = try await api.json("history", query: [.init(name: "max_items", value: "200")])
-            guard !suspended, !restoringConnection, !Task.isCancelled, client === api else { return }
+            guard canMonitorServer, !restoringConnection, !Task.isCancelled, client === api else { return }
             if let transport = irohTransport, profile.irohPeer != transport.peer { profile.irohPeer = transport.peer; save() }
             try mergeMedia(h, server: api.serverID)
             queue = q; history = currentMediaArchive.visibleHistory(h)
             restoreGenerationTasks(server: api.serverID)
+            updateGenerationActivities()
         } catch {
-            guard !suspended, !restoringConnection, !Task.isCancelled, client === api else { return }
+            guard canMonitorServer, !restoringConnection, !Task.isCancelled, client === api else { return }
             if let transport = irohTransport, (error as? URLError)?.code == .cannotConnectToHost {
                 restoreP2P(api, transport: transport)
             } else {
                 notice = "刷新失败：\(error.localizedDescription)"
             }
         }
+    }
+    private func updateGenerationActivities() {
+        generationActivities.update(tasks: currentGenerationTasks, queue: queue, history: history,
+                                    activePrompt: activePrompt, progress: progress)
     }
     func submit(_ workflow: Workflow, count: Int = 1, randomizeSeeds: Bool = false) async {
         let result = await enqueue(workflow, count: count, randomizeSeeds: randomizeSeeds)
@@ -417,12 +442,15 @@ final class PocketStore {
         generationTasks.insert(GenerationTask(id: taskID, server: api.serverID, workflowID: workflow.id,
                                               name: workflow.name, createdAt: Date().timeIntervalSince1970,
                                               requestedCount: total, submitting: true), at: 0)
+        generationActivities.backgroundExecutionChanged = { [weak self] in self?.updateBackgroundExecution() }
+        generationActivities.start(generationTasks[0])
         saveGenerationTasks()
         var queued = 0
         var result = GenerationSubmission(taskID: taskID)
         defer {
             if let index = generationTasks.firstIndex(where: { $0.id == taskID }) { generationTasks[index].submitting = false }
             saveGenerationTasks()
+            updateGenerationActivities()
         }
         do {
             for index in 0..<total {
@@ -446,6 +474,7 @@ final class PocketStore {
                 }
                 saveGenerationTasks()
                 queued += 1
+                updateGenerationActivities()
             }
             notice = "已加入 1 个任务 · \(workflow.name)\(queued > 1 ? "（\(queued) 次生成）" : "")"
             save(); await refresh()

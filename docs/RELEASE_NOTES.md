@@ -1,5 +1,5 @@
-ComfyUI Pocket v0.15.2
+ComfyUI Pocket v0.16.0
 
-- On return to the foreground, verify that ComfyUI is reachable over the paired connection before starting live events and workflow synchronization.
-- Rebuild the local HTTP tunnel and reconnect when needed. Retain the saved pairing and the local address used by open workflow canvases.
-- Show connection recovery while retrying and prevent a canceled WebSocket from closing its replacement.
+- Compact canvas buttons and four server meters for GPU, CPU, GPU memory, and RAM.
+- Expand the original node text field above the keyboard while editing, then restore the previous canvas view.
+- View submitted job progress and completion in the system Live Activity while iOS grants background execution.

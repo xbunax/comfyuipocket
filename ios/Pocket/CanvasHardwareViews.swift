@@ -2,30 +2,37 @@ import SwiftUI
 
 struct CanvasHardwareBar: View {
     let hardware: ServerHardware
-    var compact = false
     var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "cpu")
-            metric("GPU", percent(hardware.gpu))
-            metric("显存", memory(hardware.vramUsed, hardware.vramTotal))
-            if !compact {
-                metric("CPU", percent(hardware.cpu))
-                metric("内存", memory(hardware.ramUsed, hardware.ramTotal))
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.caption2)
-        }.font(.caption2).foregroundStyle(PocketPalette.secondary)
-            .accessibilityElement(children: .combine)
+        HStack(spacing: 12) {
+            metric("GPU", value: hardware.gpu)
+            metric("CPU", value: hardware.cpu)
+            metric("显存", value: hardware.vram)
+            metric("内存", value: hardware.ram)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("打开服务器硬件详情")
     }
-    private func metric(_ name: String, _ value: String) -> some View {
-        HStack(spacing: 3) {
-            Text(name); Text(value).monospacedDigit().foregroundStyle(PocketPalette.text)
-        }.lineLimit(1)
-    }
-    private func percent(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "—" }
-    private func memory(_ used: Double?, _ total: Double?) -> String {
-        guard let used, let total, ServerHardware.ratio(used: used, total: total) != nil else { return "—" }
-        return String(format: "%.1f/%.0f GB", used / 1_073_741_824, total / 1_073_741_824)
+    private func metric(_ name: String, value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 3) {
+                Text(name).foregroundStyle(PocketPalette.secondary)
+                Spacer(minLength: 0)
+                Text(value.map { "\(Int($0.rounded()))%" } ?? "—")
+                    .foregroundStyle(PocketPalette.text).monospacedDigit().fontWeight(.semibold)
+            }.font(.caption2).lineLimit(1).minimumScaleFactor(0.75)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(PocketPalette.secondary.opacity(0.19))
+                    if let value {
+                        Capsule().fill(value >= 90 ? Color.orange : PocketPalette.accent)
+                            .frame(width: geometry.size.width * value / 100)
+                    }
+                }
+            }.frame(height: 3).accessibilityHidden(true)
+        }.frame(maxWidth: .infinity)
     }
 }
 

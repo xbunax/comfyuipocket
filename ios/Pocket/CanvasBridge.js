@@ -502,7 +502,8 @@
     function restoreField() {
       if (!current) return;
       current.field.classList.remove("pocket-canvas-text-edit");
-      for (const name of ["--pocket-input-height", "--pocket-input-font"]) current.field.style.removeProperty(name);
+      for (const name of ["--pocket-input-height", "--pocket-input-font", "--pocket-input-padding"]) current.field.style.removeProperty(name);
+      for (const wrapper of current.wrappers) wrapper.classList.remove("pocket-canvas-edit-wrapper");
       if (current.widget) {
         if (current.hadHideOnZoom) current.widget.options.hideOnZoom = current.hideOnZoom;
         else delete current.widget.options.hideOnZoom;
@@ -529,8 +530,10 @@
       const bottom = Math.min(rect.bottom, (visual?.offsetTop ?? 0) + (visual?.height ?? window.innerHeight));
       if (right - left < 32 || bottom - top < 48) return;
       const camera = textInputCamera(current.bounds, { x: left - rect.left, y: top - rect.top, width: right - left, height: bottom - top });
-      current.field.style.setProperty("--pocket-input-height", `${camera.maxHeight}px`);
+      const visibleHeight = current.field.tagName === "INPUT" ? Math.min(camera.maxHeight, 40 / camera.scale) : camera.maxHeight;
+      current.field.style.setProperty("--pocket-input-height", `${visibleHeight}px`);
       current.field.style.setProperty("--pocket-input-font", `${camera.fontSize}px`);
+      current.field.style.setProperty("--pocket-input-padding", `${8 / camera.scale}px`);
       canvas.ds.scale = camera.scale;
       canvas.ds.offset[0] = camera.offset[0]; canvas.ds.offset[1] = camera.offset[1];
       canvas.setDirty(true, true);
@@ -548,7 +551,16 @@
         const found = node.widgets?.find(w => w.element === field || w.element?.contains?.(field));
         if (found) { owner = node; widget = found; break; }
       }
-      current = { field, bounds, widget, hadHideOnZoom: widget ? Object.hasOwn(widget.options, "hideOnZoom") : false, hideOnZoom: widget?.options.hideOnZoom };
+      const wrappers = [];
+      const mount = field.closest(".dom-widget");
+      if (mount && field !== mount) {
+        for (let parent = field.parentElement; parent; parent = parent.parentElement) {
+          wrappers.push(parent);
+          parent.classList.add("pocket-canvas-edit-wrapper");
+          if (parent === mount) break;
+        }
+      }
+      current = { field, bounds, widget, wrappers, hadHideOnZoom: widget ? Object.hasOwn(widget.options, "hideOnZoom") : false, hideOnZoom: widget?.options.hideOnZoom };
       if (widget) widget.options.hideOnZoom = false;
       field.classList.add("pocket-canvas-text-edit");
       send("textEditing", { active: true, nodeID: owner ? String(owner.id) : "" });
@@ -815,8 +827,16 @@
     #pocket-overview-map canvas { width:88px; height:42px; display:block; }
     @media (max-height:340px) { #pocket-overview-map { visibility:hidden; } }
     canvas { touch-action: none; } input, textarea, select { font-size: max(16px, 1em); }
-    .pocket-canvas-text-edit { font-size: var(--pocket-input-font) !important; }
-    textarea.pocket-canvas-text-edit { max-height: var(--pocket-input-height) !important; min-height: 0 !important; resize: none !important; box-sizing: border-box !important; }
+    .pocket-canvas-edit-wrapper { clip-path: none !important; overflow: visible !important; }
+    .dom-widget.pocket-canvas-edit-wrapper { z-index: 2147483000 !important; }
+    .pocket-canvas-text-edit {
+      font-size: var(--pocket-input-font) !important; line-height: 1.45 !important;
+      height: var(--pocket-input-height) !important; min-height: var(--pocket-input-height) !important;
+      max-height: var(--pocket-input-height) !important; padding: var(--pocket-input-padding) !important;
+      resize: none !important; box-sizing: border-box !important; overflow: auto !important;
+      overscroll-behavior: contain; touch-action: auto;
+      background: var(--comfy-input-bg, #202124) !important;
+    }
     .litecontextmenu { max-height: 70dvh; overflow-y: auto; } .litecontextmenu .litemenu-entry { min-height: 36px; }
     html, body { overscroll-behavior: none; }`;
   document.head.append(style);
