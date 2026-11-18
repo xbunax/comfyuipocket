@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -132,9 +133,45 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
     async def test_identity_and_approved_peers_survive_restart(self):
         await self.authenticate(self.invite["token"])
         identity = str(self.service.endpoint.id())
-        await self.service.stop(); await self.service.start()
+        ports = dict(self.service.udp_ports)
+        await self.service.stop(disable=False)
+        self.service = pairing.PairingServer(self.service.path, self.service.port)
+        await self.service.start()
         self.assertEqual(str(self.service.endpoint.id()), identity)
         self.assertIn(str(self.client.id()), self.service.peers)
+        self.assertEqual(self.service.udp_ports, ports)
+        # Use the original ticket and no token. Both endpoints have discovery
+        # disabled in the fixture, so this requires the saved UDP sockets.
+        await self.authenticate(None)
+
+    async def test_legacy_identity_acquires_ports_without_losing_authorization(self):
+        await self.authenticate(self.invite["token"])
+        identity = str(self.service.endpoint.id())
+        await self.service.stop(disable=False)
+        saved = json.loads(self.service.path.read_text(encoding="utf-8"))
+        saved.pop("udpPorts")
+        self.service.path.write_text(json.dumps(saved), encoding="utf-8")
+        self.service = pairing.PairingServer(self.service.path, self.service.port)
+        await self.service.start()
+        self.assertEqual(str(self.service.endpoint.id()), identity)
+        self.assertIn(str(self.client.id()), self.service.peers)
+        self.assertTrue(self.service.udp_ports)
+        self.assertEqual(json.loads(self.service.path.read_text())["udpPorts"], self.service.udp_ports)
+
+    async def test_port_conflict_preserves_other_family_and_saved_peer(self):
+        await self.authenticate(self.invite["token"])
+        ports = dict(self.service.udp_ports)
+        await self.service.stop(disable=False)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:
+            occupied.bind(("0.0.0.0", ports["ipv4"]))
+            self.service = pairing.PairingServer(self.service.path, self.service.port)
+            with self.assertLogs("pocket_pairing", level="INFO") as logs:
+                await self.service.start()
+            self.assertNotEqual(self.service.udp_ports["ipv4"], ports["ipv4"])
+            if "ipv6" in ports:
+                self.assertEqual(self.service.udp_ports["ipv6"], ports["ipv6"])
+            self.assertIn(str(self.client.id()), self.service.peers)
+            self.assertNotIn(self.invite["token"], "\n".join(logs.output))
 
 
 if __name__ == "__main__": unittest.main()

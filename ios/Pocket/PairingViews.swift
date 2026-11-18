@@ -16,7 +16,7 @@ struct IrohPairingFields: View {
                     Label(peer.name, systemImage: "desktopcomputer").font(.headline)
                     Text("设备 \(peer.endpointId.prefix(12))…\(peer.endpointId.suffix(6))")
                         .font(.caption.monospaced()).foregroundStyle(PocketPalette.secondary)
-                    Text("已保存配对，可直接重连。更换电脑时扫描或粘贴新的配对码。")
+                    Text("已保存配对。断线后会自动重连。若电脑更换地址且无法自动找到，可扫描这台电脑的新二维码刷新地址。")
                         .font(.caption).foregroundStyle(PocketPalette.secondary)
                 }.padding(.vertical, 4)
             }

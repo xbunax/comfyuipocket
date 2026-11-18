@@ -225,6 +225,11 @@ final class PocketStore {
                 try await transport.start()
                 guard lastConnection == attempt else { transport.stop(); return }
                 profile.irohPeer = transport.peer; save()
+                transport.onReconnect = { [weak self] peer in
+                    guard let self, self.lastConnection == attempt, self.profile.irohPeer != peer else { return }
+                    self.profile.irohPeer = peer
+                    self.save()
+                }
                 guard let url = transport.baseURL, let access = transport.access else {
                     throw PocketError.message("本地直连通道未就绪。")
                 }
@@ -289,9 +294,11 @@ final class PocketStore {
     }
     func resume() async {
         guard connected, let client else { return }
+        irohTransport?.resumeMonitoring()
         startEvents(client); await refresh(); await syncNow()
     }
     func suspend() {
+        irohTransport?.suspendMonitoring()
         events?.cancel(); polling?.cancel(); syncLoop?.cancel(); pushTask?.cancel()
         client?.disconnect(); socketConnected = false
     }

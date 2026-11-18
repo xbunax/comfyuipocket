@@ -1,19 +1,8 @@
-ComfyUI Pocket v0.14.1
+ComfyUI Pocket v0.14.2
 
-- Wait for ComfyUI's saved workflow tabs to finish restoring before opening the
-  requested canvas. Previously, restoration could replace the requested graph
-  after node setup, producing false class_type mismatches across an entire prompt.
-- Verify graph identity and node IDs before applying mobile parameters. Retry a
-  displaced load once, and stop safely if another graph remains active. Never
-  assign parameters to a different node type that happens to reuse the same ID.
-- Check graph ownership again after asynchronous export so a workflow switch
-  cannot save another canvas into the current workflow.
-- Add regression coverage for delayed tab restoration, displaced graph loads,
-  and node ID collisions. Preserve the original workflows and custom nodes.
-- Preserve custom nodes that already serialize in bypass mode. In particular,
-  Goohai Qwen's string-only bypass must retain its goohai_bypass flag and must
-  not be switched into normal model execution when opening the canvas.
+- Preserve the computer’s IPv4 and IPv6 UDP ports across ComfyUI restarts. If a port is occupied, retain the other family where possible and save the new ports for the next restart.
+- Retry saved addresses first, then perform fresh iroh address lookup using the same paired identity. Foreground sessions reconnect with backoff and save the refreshed ticket immediately. If neither route is reachable, scanning a new code for the same computer refreshes its address.
+- Add P2P phase logs in the ComfyUI log and on iOS. Log timestamps, stages and failure categories without printing keys, tickets or QR tokens.
+- Update the computer plugin to 0.9.1 and restart ComfyUI once. Existing identities and approved devices are migrated in place. The first restart after upgrading from 0.9.0 may require one address refresh because older versions did not save UDP ports.
 
-Pocket plugin remains 0.9.0; no reinstall required. Device IPA build only, no
-simulator tests. Verify opening MiniMax, Qwen and switching between cached
-canvases on a physical iPhone/iPad.
+Device IPA build with no simulator run. Connections require a direct IP path.

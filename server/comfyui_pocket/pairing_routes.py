@@ -87,9 +87,9 @@ def register_pairing_routes(server, catalog_for, same_origin, read_json):
                 if hasattr(server, "port"):
                     await current_service().start(); return
                 await asyncio.sleep(0.1)
-            logging.warning("Pocket P2P 未启动：ComfyUI 端口尚未就绪。")
-        except Exception:
-            logging.warning("Pocket P2P 未启动：请检查插件依赖和已保存的配对身份。IP 连接仍可使用。")
+            logging.warning("Pocket P2P phase=startup result=comfyui_port_unavailable")
+        except Exception as error:
+            logging.warning("Pocket P2P phase=startup result=failed error=%s", type(error).__name__)
 
     async def startup(app):
         nonlocal startup_task

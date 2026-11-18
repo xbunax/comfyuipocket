@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import IrohLib
 import Network
+import OSLog
 import Security
 import WebKit
 
@@ -22,18 +23,17 @@ final class IrohTransport {
     @ObservationIgnored private var channels: [UUID: (NWConnection, Task<Void, Never>)] = [:]
     @ObservationIgnored private var stopped = false
     @ObservationIgnored private var cookie: HTTPCookie?
+    @ObservationIgnored private var retryAfter: ContinuousClock.Instant?
+    @ObservationIgnored private var retryDelay = 1
+    @ObservationIgnored var onReconnect: ((IrohPeerProfile) -> Void)?
     private static let alpn = Data("comfyuipocket/tcp/1".utf8)
+    private static let log = Logger(subsystem: "com.xbunax.comfyuipocket", category: "P2P")
 
     init(peer: IrohPeerProfile, token: String? = nil) { self.peer = peer; enrollmentToken = token }
 
     func start() async throws {
         status = "建立仅直连通道…"
-        endpoint = try await timed(15) {
-            let endpoint = try await Endpoint.bind(options: EndpointOptions(preset: presetN0DisableRelay(),
-                secretKey: Self.identity(), relayMode: RelayMode.disabled()))
-            guard !self.stopped, !Task.isCancelled else { try? await endpoint.close(); throw CancellationError() }
-            return endpoint
-        }
+        endpoint = try await bindEndpoint()
         _ = try await ensureConnection()
         let url = try await startListener()
         guard let access else { throw PocketError.message("本地通道未就绪。") }
@@ -43,6 +43,8 @@ final class IrohTransport {
         await WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie)
         baseURL = url
         status = "已直连 · 已禁用中继"
+        Self.log.info("phase=loopback result=ready")
+        resumeMonitoring()
     }
 
     func stop() {
@@ -56,72 +58,191 @@ final class IrohTransport {
         status = "已断开"
     }
 
+    func suspendMonitoring() {
+        monitor?.cancel()
+        monitor = nil
+    }
+
+    private func bindEndpoint() async throws -> Endpoint {
+        Self.log.info("phase=bind result=starting")
+        do {
+            let endpoint = try await timed(8) {
+                let endpoint = try await Endpoint.bind(options: EndpointOptions(preset: presetN0DisableRelay(),
+                    secretKey: Self.identity(), relayMode: RelayMode.disabled()))
+                guard !self.stopped, !Task.isCancelled else {
+                    try? await endpoint.close()
+                    throw CancellationError()
+                }
+                return endpoint
+            }
+            Self.log.info("phase=bind result=ready")
+            return endpoint
+        } catch {
+            Self.log.error("phase=bind result=failed error=\(String(reflecting: type(of: error)), privacy: .public)")
+            throw error
+        }
+    }
+
+    func resumeMonitoring() {
+        guard !stopped, monitor == nil else { return }
+        retryAfter = nil
+        monitor = Task { @MainActor [weak self] in
+            var missingSince: ContinuousClock.Instant?
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, !self.stopped else { return }
+                let now = ContinuousClock.now
+                if let connection = self.connection {
+                    let paths = connection.paths()
+                    if paths.contains(where: { $0.isIp && $0.isSelected }) {
+                        missingSince = nil
+                    } else if missingSince == nil {
+                        missingSince = now
+                    }
+                    let expired = missingSince.map { $0.duration(to: now) >= .seconds(15) } ?? false
+                    if connection.closeReason() != nil || paths.contains(where: \.isRelay) || expired {
+                        try? connection.close(errorCode: 1, reason: Data("direct path lost".utf8))
+                        self.connection = nil
+                        self.status = "直连已断开，正在重连…"
+                        Self.log.info("phase=session result=lost")
+                    }
+                }
+                if self.connection == nil, self.retryAfter.map({ now >= $0 }) ?? true {
+                    missingSince = nil
+                    _ = try? await self.ensureConnection()
+                }
+            }
+        }
+    }
+
     private func ensureConnection() async throws -> IrohLib.Connection {
-        guard !stopped, let endpoint else { throw PocketError.message("P2P 通道已关闭。") }
+        guard !stopped else { throw PocketError.message("P2P 通道已关闭。") }
         if let connection, connection.closeReason() == nil { return connection }
         if let connecting { return try await connecting.value }
+        if let retryAfter, ContinuousClock.now < retryAfter {
+            throw PocketError.message("正等待下一次 P2P 重连。")
+        }
         let task = Task<IrohLib.Connection, Error> { @MainActor in
-            self.status = "正在建立直连…"
-            return try await self.timed(15) {
-                let ticket = try EndpointTicket.fromString(str: self.peer.ticket)
-                let address = ticket.endpointAddr()
-                guard address.id().description == self.peer.endpointId, address.relayUrl() == nil else {
-                    throw PocketError.message("配对设备身份不符，或配对信息包含中继地址。")
+            do {
+                if self.endpoint == nil { self.endpoint = try await self.bindEndpoint() }
+                guard let endpoint = self.endpoint else { throw CancellationError() }
+                let connection = try await self.openDirectConnection(endpoint)
+                let freshTicket = try await self.authorize(connection)
+                guard !self.stopped, !Task.isCancelled else {
+                    try? connection.close(errorCode: 0, reason: Data())
+                    throw CancellationError()
                 }
-                let connection = try await endpoint.connect(addr: address, alpn: Self.alpn)
-                do {
-                    guard connection.remoteId().description == self.peer.endpointId,
-                          connection.paths().contains(where: { $0.isIp && $0.isSelected }),
-                          !connection.paths().contains(where: \.isRelay) else {
-                        throw PocketError.message("未建立 IP 直连；已拒绝中继连接。")
-                    }
-                    let stream = try await connection.openBi()
-                    let hello: JSONValue = .object(["v": .integer(1), "token": self.enrollmentToken.map(JSONValue.string) ?? .null])
-                    try await Self.writeFrame(stream.send(), value: hello)
-                    try await stream.send().finish()
-                    let response = try await Self.readFrame(stream.recv())
-                    guard response["ok"] == .bool(true), response["v"] == .integer(1), response["directOnly"] == .bool(true),
-                          response["endpointId"].text == self.peer.endpointId else {
-                        throw PocketError.message("电脑拒绝了配对，请重新生成配对码。")
-                    }
-                    let fresh = try EndpointTicket.fromString(str: response["ticket"].text).endpointAddr()
-                    guard fresh.id().description == self.peer.endpointId, fresh.relayUrl() == nil else {
-                        throw PocketError.message("电脑返回了无效的直连地址。")
-                    }
-                    self.peer.ticket = response["ticket"].text
-                    self.authenticated = true; self.enrollmentToken = nil
-                    return connection
-                } catch {
-                    try? connection.close(errorCode: 1, reason: Data("pairing rejected".utf8)); throw error
+                let reconnecting = self.authenticated
+                self.peer.ticket = freshTicket
+                self.authenticated = true
+                self.enrollmentToken = nil
+                self.connection = connection
+                self.retryAfter = nil
+                self.retryDelay = 1
+                self.status = "已直连 · 已禁用中继"
+                Self.log.info("phase=authorize result=accepted reconnect=\(reconnecting)")
+                if reconnecting { self.onReconnect?(self.peer) }
+                return connection
+            } catch {
+                guard !self.stopped, !Task.isCancelled, !(error is CancellationError) else {
+                    throw CancellationError()
                 }
+                if self.authenticated {
+                    self.retryAfter = ContinuousClock.now.advanced(by: .seconds(self.retryDelay))
+                    self.retryDelay = min(self.retryDelay * 2, 30)
+                    self.status = "直连未恢复，正在自动重试"
+                } else {
+                    self.status = "无法建立直连"
+                }
+                throw error
             }
         }
         connecting = task
         defer { connecting = nil }
+        return try await task.value
+    }
+
+    private func openDirectConnection(_ endpoint: Endpoint) async throws -> IrohLib.Connection {
+        let address = try EndpointTicket.fromString(str: peer.ticket).endpointAddr()
+        guard address.id().description == peer.endpointId, address.relayUrl() == nil else {
+            Self.log.error("phase=ticket result=invalid_identity_or_relay")
+            throw PocketError.message("保存的 P2P 地址与设备身份不符，请从电脑刷新配对码。")
+        }
+        status = "正在尝试保存的直连地址…"
         do {
-            let connection = try await task.value
-            guard !stopped else { try? connection.close(errorCode: 0, reason: Data()); throw CancellationError() }
-            self.connection = connection; status = "已直连 · 已禁用中继"
-            monitor?.cancel()
-            monitor = Task { @MainActor [weak self] in
-                var missingSince: Date?
-                while !Task.isCancelled, let self, self.connection === connection {
-                    let paths = connection.paths()
-                    if paths.contains(where: \.isRelay) { try? connection.close(errorCode: 1, reason: Data("relay forbidden".utf8)) }
-                    if paths.contains(where: { $0.isIp && $0.isSelected }) { missingSince = nil }
-                    else { if missingSince == nil { missingSince = Date() } }
-                    if connection.closeReason() != nil || missingSince.map({ Date().timeIntervalSince($0) > 15 }) == true {
-                        try? connection.close(errorCode: 1, reason: Data("direct path lost".utf8))
-                        self.connection = nil; self.status = "直连已断开，等待重连"; return
-                    }
-                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
-                }
-            }
+            let connection = try await dial(endpoint, address: address, seconds: 6)
+            Self.log.info("phase=cached_address result=connected")
             return connection
         } catch {
-            status = "无法建立直连；未使用中继"
-            if error is CancellationError { throw error }
-            throw PocketError.message("无法与电脑建立直连。请确认电脑已启用 Pocket P2P、配对仍有效且网络允许 UDP 直连；也可改用 IP 连接。")
+            try Task.checkCancellation()
+            Self.log.notice("phase=cached_address result=failed error=\(String(reflecting: type(of: error)), privacy: .public)")
+        }
+        status = "正在查找电脑的最新地址…"
+        let discovered = EndpointAddr(id: address.id(), relayUrl: nil, addresses: [])
+        do {
+            // A fresh endpoint clears the old remote address and its pending dial.
+            // Keep the phone's identity and the local HTTP/WebSocket listener.
+            try await endpoint.close()
+            self.endpoint = nil
+            try Task.checkCancellation()
+            let rediscoveryEndpoint = try await bindEndpoint()
+            self.endpoint = rediscoveryEndpoint
+            let connection = try await dial(rediscoveryEndpoint, address: discovered, seconds: 12)
+            Self.log.info("phase=address_lookup result=connected")
+            return connection
+        } catch {
+            try Task.checkCancellation()
+            Self.log.error("phase=address_lookup result=failed error=\(String(reflecting: type(of: error)), privacy: .public)")
+            throw PocketError.message("保存的地址连不上，也未能通过地址发现直连。请确认电脑已启用 Pocket P2P。若电脑地址已变，可扫描同一台电脑的新二维码来刷新地址。")
+        }
+    }
+
+    private func dial(_ endpoint: Endpoint, address: EndpointAddr, seconds: Double) async throws -> IrohLib.Connection {
+        let expectedID = peer.endpointId
+        return try await timed(seconds) {
+            let connection = try await endpoint.connect(addr: address, alpn: Self.alpn)
+            do {
+                try Task.checkCancellation()
+                let paths = connection.paths()
+                guard connection.remoteId().description == expectedID,
+                      paths.contains(where: { $0.isIp && $0.isSelected }),
+                      !paths.contains(where: \.isRelay) else {
+                    throw PocketError.message("未建立可信的 IP 直连。")
+                }
+                return connection
+            } catch {
+                try? connection.close(errorCode: 1, reason: Data("direct path unavailable".utf8))
+                throw error
+            }
+        }
+    }
+
+    private func authorize(_ connection: IrohLib.Connection) async throws -> String {
+        let expectedID = peer.endpointId
+        let token = enrollmentToken
+        do {
+            return try await timed(8) {
+                let stream = try await connection.openBi()
+                let hello: JSONValue = .object(["v": .integer(1), "token": token.map(JSONValue.string) ?? .null])
+                try await Self.writeFrame(stream.send(), value: hello)
+                try await stream.send().finish()
+                let response = try await Self.readFrame(stream.recv())
+                guard response["ok"] == .bool(true), response["v"] == .integer(1),
+                      response["directOnly"] == .bool(true), response["endpointId"].text == expectedID else {
+                    throw PocketError.message("配对确认无效。")
+                }
+                let ticket = response["ticket"].text
+                let fresh = try EndpointTicket.fromString(str: ticket).endpointAddr()
+                guard fresh.id().description == expectedID, fresh.relayUrl() == nil else {
+                    throw PocketError.message("电脑返回了无效的直连地址。")
+                }
+                return ticket
+            }
+        } catch {
+            try? connection.close(errorCode: 1, reason: Data("authorization incomplete".utf8))
+            try Task.checkCancellation()
+            Self.log.error("phase=authorize result=failed error=\(String(reflecting: type(of: error)), privacy: .public)")
+            throw PocketError.message("已连到电脑，但未完成配对验证。请检查电脑 Pocket 面板的已配对设备和连接日志。")
         }
     }
 
