@@ -24,7 +24,7 @@ struct CanvasHardwareBar: View {
     }
     private func percent(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "—" }
     private func memory(_ used: Double?, _ total: Double?) -> String {
-        guard let used, let total, ServerHardware.ratio(used, total: total) != nil else { return "—" }
+        guard let used, let total, ServerHardware.ratio(used: used, total: total) != nil else { return "—" }
         return String(format: "%.1f/%.0f GB", used / 1_073_741_824, total / 1_073_741_824)
     }
 }
