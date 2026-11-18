@@ -39,7 +39,6 @@ struct IrohPairingFields: View {
                     }.font(.caption)
                 }
             }
-            if let transport = store.irohTransport { Label(transport.status, systemImage: "point.3.connected.trianglepath.dotted").font(.caption) }
         } header: { Text("P2P 配对") } footer: {
             Text("在电脑 ComfyUI 的 Pocket 面板生成配对码或二维码，5 分钟内完成首次配对。仅允许直连，不使用中继；无法直连会明确报错。电脑需安装新版 Pocket 插件及其依赖。")
         }
@@ -65,6 +64,78 @@ struct IrohPairingFields: View {
                 } catch { store.error = error.localizedDescription }
             }
         }
+        if let transport = store.irohTransport {
+            P2PDiagnostics(transport: transport)
+        }
+    }
+}
+
+private struct P2PDiagnostics: View {
+    let transport: IrohTransport
+    @State private var showLog = false
+    private var test: DirectSpeedTest { transport.speedTest }
+    var body: some View {
+        Section("连接进度") {
+            HStack(spacing: 12) {
+                Image(systemName: UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone")
+                Rectangle().fill(.secondary.opacity(0.35)).frame(height: 1)
+                Image(systemName: transport.directReady ? "link" : "arrow.triangle.2.circlepath")
+                    .foregroundStyle(transport.directReady ? PocketPalette.accent : .orange)
+                Rectangle().fill(.secondary.opacity(0.35)).frame(height: 1)
+                Image(systemName: "desktopcomputer")
+            }.font(.title3).padding(.horizontal, 20).accessibilityHidden(true)
+            Label(transport.status, systemImage: transport.directReady ? "checkmark.circle" : "network")
+                .font(.subheadline.weight(.medium))
+            if transport.canRetryNow {
+                Button("现在重试", systemImage: "arrow.clockwise") { Task { await transport.retryNow() } }
+            }
+            DisclosureGroup("连接日志", isExpanded: $showLog) {
+                ForEach(transport.events.reversed()) { event in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(event.time, format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit())
+                        Text(event.message).font(.caption)
+                    }.foregroundStyle(PocketPalette.secondary)
+                }
+            }
+        }
+        Section {
+            if transport.supportsSpeedTest {
+                Button {
+                    if test.running { test.cancel() } else { transport.testSpeed() }
+                } label: {
+                    HStack {
+                        Label(test.running ? "取消测速" : "P2P 测速", systemImage: "speedometer")
+                        Spacer()
+                        if test.running { ProgressView().controlSize(.small) }
+                    }
+                }.disabled(!transport.directReady && !test.running)
+                if !test.stage.isEmpty {
+                    Text(test.stage).font(.caption).foregroundStyle(PocketPalette.secondary)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 20) { readings }
+                        VStack(alignment: .leading, spacing: 8) { readings }
+                    }
+                }
+            } else if transport.directReady {
+                Text("将电脑端 Pocket 插件更新到 0.10.0 并重启，即可测试当前直连。").font(.footnote)
+            } else {
+                Label("建立直连后可测速", systemImage: "speedometer").foregroundStyle(PocketPalette.secondary)
+            }
+        } header: { Text("直连测速") } footer: {
+            Text("测量手机到这台电脑的往返延迟，以及实际上传和下载速度。每次测试两个方向各传输 2 MiB。")
+        }
+    }
+    @ViewBuilder private var readings: some View {
+        reading("往返延迟", value: test.latency, unit: "ms")
+        reading("下载", value: test.download, unit: "Mbps")
+        reading("上传", value: test.upload, unit: "Mbps")
+    }
+    private func reading(_ title: String, value: Double?, unit: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundStyle(PocketPalette.secondary)
+            Text(value.map { $0.formatted(.number.precision(.fractionLength(0...2))) + " " + unit } ?? "—")
+                .font(.subheadline.monospacedDigit().weight(.medium)).fixedSize(horizontal: true, vertical: false)
+        }.accessibilityElement(children: .combine)
     }
 }
 

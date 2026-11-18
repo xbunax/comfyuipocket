@@ -65,6 +65,14 @@ final class ComfyClient {
         var r = try request(path); r.timeoutInterval = 3; r.cachePolicy = .reloadIgnoringLocalCacheData
         return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
     }
+    func outputDirectory(folder: String, offset: Int, sort: String, ascending: Bool) async throws -> OutputDirectoryPage {
+        let data = try await checked(request("pocket/v1/outputs", query: [
+            .init(name: "folder", value: folder), .init(name: "offset", value: String(offset)),
+            .init(name: "limit", value: "60"), .init(name: "sort", value: sort),
+            .init(name: "direction", value: ascending ? "ascending" : "descending")
+        ]))
+        return try JSONDecoder().decode(OutputDirectoryPage.self, from: data)
+    }
     func image(_ image: OutputImage) async throws -> Data {
         try await mediaData(mediaURL(image), revision: image.promptID)
     }

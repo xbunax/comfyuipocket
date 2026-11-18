@@ -1,7 +1,7 @@
 # ComfyUI Pocket server plugin
 
 Copy this folder into `ComfyUI/custom_nodes/comfyui_pocket` and restart ComfyUI.
-IP mode needs no extra packages or model node. Optional P2P pairing (plugin 0.9.1)
+IP mode needs no extra packages or model node. Optional P2P pairing (plugin 0.10.0)
 requires installing this folder's requirements.txt using ComfyUI's Python:
 
 ```powershell

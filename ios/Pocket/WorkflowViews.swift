@@ -19,6 +19,7 @@ struct LibraryView: View {
     @State private var preferredColumn: NavigationSplitViewColumn = .sidebar
     @State private var importing = false
     @State private var search = ""
+    @State private var taskDetail: GenerationTask?
     @State private var showPrompts = false
     @State private var showSettings = false
     @AppStorage("collapsedWorkflowGroups") private var collapsedGroupsRaw = ""
@@ -37,19 +38,30 @@ struct LibraryView: View {
                     }
                 } else {
                     List(selection: $selectedWorkflow) {
-                        Section {
-                            VStack(alignment: .leading, spacing: 14) {
-                                PocketConnectionSummary()
-                                ViewThatFits(in: .horizontal) {
-                                    HStack(spacing: 8) { libraryMetrics }
-                                    VStack(alignment: .leading, spacing: 8) { libraryMetrics }
-                                }
-                            }.padding(.vertical, 4)
-                        }
                         if searchText.isEmpty {
+                            Section {
+                                HStack(spacing: 7) {
+                                    Circle().fill(store.connected ? .green : .secondary).frame(width: 7, height: 7)
+                                    Text(store.client?.displayAddress ?? "未连接服务器").lineLimit(1)
+                                    if store.irohTransport?.directReady == true { Text("· 直连") }
+                                }.font(.caption).foregroundStyle(PocketPalette.secondary)
+                                if let recent = store.lastOpenedWorkflow ?? pinned.first ?? store.workflows.first {
+                                    Button {
+                                        selectedWorkflow = recent.id; preferredColumn = .detail
+                                    } label: { resumeCard(recent) }.buttonStyle(.plain)
+                                }
+                            }.listRowBackground(Color.clear).listRowSeparator(.hidden)
+                                .listRowInsets(.init(top: 4, leading: 0, bottom: 4, trailing: 0))
                             if !pinned.isEmpty {
-                                Section("置顶") {
+                                Section("置顶工作流 · \(pinned.count)") {
                                     ForEach(pinned) { workflow in row(for: workflow) }
+                                }
+                            }
+                            if let task = store.currentGenerationTasks.first(where: {
+                                $0.submitting || $0.summary(queue: store.queue, history: store.history).active
+                            }) {
+                                Section("当前任务") {
+                                    Button { taskDetail = task } label: { activeTaskCard(task) }.buttonStyle(.plain)
                                 }
                             }
                             ForEach(groups) { group in
@@ -106,6 +118,12 @@ struct LibraryView: View {
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                 switch result { case .success(let url): store.importFile(url); case .failure(let error): store.error = error.localizedDescription }
             }
+            .sheet(item: $taskDetail) { task in
+                NavigationStack {
+                    GenerationTaskDetailView(taskID: task.id)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { taskDetail = nil } } }
+                }
+            }
             .sheet(isPresented: $showPrompts) { PromptLibraryView() }
             .sheet(isPresented: $showSettings) {
                 NavigationStack {
@@ -128,15 +146,45 @@ struct LibraryView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .environment(\.horizontalSizeClass, layout.usesColumns ? .regular : .compact)
-        .onChange(of: selectedWorkflow) { _, next in if next != nil { preferredColumn = .detail } }
+        .onChange(of: selectedWorkflow) { _, next in if let next { store.rememberOpened(next); preferredColumn = .detail } }
         .onChange(of: store.workflows.map(\.id)) { _, ids in
             if let selectedWorkflow, !ids.contains(selectedWorkflow) { self.selectedWorkflow = nil; preferredColumn = .sidebar }
         }
     }
 
-    @ViewBuilder private var libraryMetrics: some View {
-        PocketMetric(title: "工作流", value: store.workflows.count, icon: "square.stack.3d.up")
-        PocketMetric(title: "置顶", value: pinned.count, icon: "pin")
+    private func resumeCard(_ workflow: Workflow) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(colors: [PocketPalette.accent.opacity(0.65), PocketPalette.surface], startPoint: .topTrailing, endPoint: .bottomLeading)
+            if let output = store.lastOutput(for: workflow.id), store.connected {
+                RemoteImage(output: output, fill: true)
+            } else {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 66, weight: .thin)).foregroundStyle(.white.opacity(0.55))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(18)
+            }
+            LinearGradient(colors: [.clear, .black.opacity(0.76)], startPoint: .top, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 5) {
+                Label(store.lastOpenedWorkflow?.id == workflow.id ? "继续编辑" : "打开工作流", systemImage: "arrow.right.circle")
+                    .font(.caption.weight(.medium))
+                Text(workflow.name).font(.title3.bold()).lineLimit(2)
+                Text("\(workflow.prompt.count) 个执行节点 · \(workflow.fields.count) 项参数").font(.caption)
+            }.foregroundStyle(.white).padding(14)
+        }.frame(height: 155).clipShape(.rect(cornerRadius: 18)).contentShape(Rectangle())
+    }
+    private func activeTaskCard(_ task: GenerationTask) -> some View {
+        let summary = task.summary(queue: store.queue, history: store.history)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack { Text(task.title).font(.subheadline.bold()).lineLimit(2); Spacer(); Image(systemName: "chevron.right").font(.caption) }
+            ProgressView(value: Double(summary.finished), total: Double(max(task.requestedCount, 1))).tint(PocketPalette.accent)
+            HStack {
+                Text(task.submitting ? "提交中" : summary.label)
+                Spacer()
+                Text("已结束 \(summary.finished) / \(task.requestedCount)")
+                if !store.activePrompt.isEmpty, task.items.contains(where: { $0.id == store.activePrompt }) {
+                    Text("· 当前节点 \(Int(store.progress * 100))%")
+                }
+            }.font(.caption).foregroundStyle(PocketPalette.secondary)
+        }.padding(.vertical, 4)
     }
 
     private var searchText: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }

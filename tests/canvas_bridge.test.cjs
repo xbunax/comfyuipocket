@@ -306,3 +306,30 @@ test('text input camera keeps the field readable inside keyboard and visual view
     assert.ok(camera.fontSize*camera.scale>=15.99);
   }
 });
+
+test('overview tap picks the hit node only after native pointer handling', () => {
+  const { installOverviewTap } = require('../ios/Pocket/CanvasBridge.js');
+  let enabled = false, editable = false, port = false;
+  const handlers = {}, frames = [], focused = [], surface = {
+    addEventListener: (key, fn) => { handlers[key] = fn; },
+    requestAnimationFrame: fn => frames.push(fn)
+  };
+  const canvasElement = {closest: () => null};
+  const node = {id: 31, getSlotInPosition: () => port, getWidgetOnPos: () => editable};
+  const makeGraph = () => ({_nodes: [node], getNodeOnPos: x => x < 50 ? node : null});
+  const canvas = {canvas: canvasElement, graph: makeGraph(), convertEventToCanvasOffset: e => [e.clientX, e.clientY]};
+  installOverviewTap({canvas}, () => enabled, id => { focused.push(id); enabled = false; }, surface);
+  const fire = (name, props = {}) => handlers[name]({target:canvasElement,pointerId:1,button:0,isPrimary:true,clientX:10,clientY:10,timeStamp:100,...props});
+  const finish = () => { while (frames.length) frames.shift()(); };
+  const tap = props => { fire('pointerdown',props); fire('pointerup',props); finish(); };
+  tap(); enabled=true; editable=true; tap(); editable=false; port=true; tap(); port=false;
+  tap({clientX:100}); tap({metaKey:true}); tap({target:{closest:()=>({})}});
+  fire('pointerdown'); fire('pointermove',{clientX:30}); fire('pointerup'); finish();
+  fire('pointerdown'); fire('pointerdown',{pointerId:2,isPrimary:false}); fire('pointerup'); finish();
+  fire('pointerdown'); fire('pointercancel'); fire('pointerup'); finish();
+  fire('pointerdown'); fire('pointerup',{timeStamp:600}); finish();
+  fire('pointerdown'); fire('pointerup'); canvas.graph=makeGraph(); finish();
+  assert.deepEqual(focused,[]);
+  fire('pointerdown'); fire('pointerup'); assert.deepEqual(focused,[]); finish();
+  tap(); assert.deepEqual(focused,['31']);
+});

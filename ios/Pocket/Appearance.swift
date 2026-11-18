@@ -23,10 +23,14 @@ extension PocketColorway {
     var replacesNodeStyle: Bool {
         didSet { UserDefaults.standard.set(replacesNodeStyle, forKey: "appearance.replacesNodeStyle") }
     }
+    var overviewTapFocus: Bool {
+        didSet { UserDefaults.standard.set(overviewTapFocus, forKey: "canvas.overviewTapFocus") }
+    }
     var colorScheme: ColorScheme? { mode == "dark" ? .dark : mode == "light" ? .light : nil }
     private init() {
         colorway = PocketColorway(rawValue: UserDefaults.standard.string(forKey: "appearance.colorway") ?? "") ?? .celadon
         mode = UserDefaults.standard.string(forKey: "appearance.mode") ?? "system"
+        overviewTapFocus = UserDefaults.standard.bool(forKey: "canvas.overviewTapFocus")
         replacesNodeStyle = UserDefaults.standard.bool(forKey: "appearance.replacesNodeStyle")
     }
 }
@@ -67,6 +71,12 @@ struct CanvasAppearanceSettings: View {
     var body: some View {
         @Bindable var appearance = PocketAppearance.shared
         Form {
+            Section {
+                Toggle("总览中轻点节点聚焦", isOn: $appearance.overviewTapFocus)
+                    .accessibilityIdentifier("canvas.overviewTapFocus")
+            } header: { Text("画布操作") } footer: {
+                Text("轻点总览中的节点标题或空白处会放大该节点。点「总览」可返回全图。")
+            }
             Section {
                 Toggle("替换节点样式", isOn: $appearance.replacesNodeStyle)
             } header: { Text("节点外观") } footer: {

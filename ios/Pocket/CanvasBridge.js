@@ -273,6 +273,47 @@
     canvas.setDirty(true, true); return true;
   }
 
+  // Observe native gestures without taking pointer capture or cancelling events.
+  function installOverviewTap(app, enabled, focus, surface = window) {
+    let press, serial = 0;
+    const reset = () => { press = null; serial++; };
+    function hit(e) {
+      const canvas = app.canvas, element = e.target;
+      if (element?.closest?.('button,input,textarea,select,a,[contenteditable]:not([contenteditable=false]),[role=button],[role=slider],[role=combobox],[role=menu],.dom-widget')) return;
+      const domNode = element?.closest?.('[data-node-id]');
+      if (element !== canvas.canvas && !(domNode && app.canvasContainer?.contains(domNode))) return;
+      const rect = canvas.canvas.getBoundingClientRect?.();
+      const point = canvas.convertEventToCanvasOffset?.(e) ?? (rect && canvas.ds && [
+        (e.clientX - rect.left) / canvas.ds.scale - canvas.ds.offset[0],
+        (e.clientY - rect.top) / canvas.ds.scale - canvas.ds.offset[1]]);
+      if (!point) return;
+      const node = domNode ? nodeAt(canvas.graph, domNode.dataset.nodeId) : canvas.graph.getNodeOnPos?.(...point);
+      if (!node || node.getSlotInPosition?.(...point) || node.getWidgetOnPos?.(...point)) return;
+      return node;
+    }
+    function down(e) {
+      reset();
+      if (!enabled() || e.isPrimary === false || e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+      const node = hit(e);
+      if (node) press = { node, graph: app.canvas.graph, id: e.pointerId, x: e.clientX, y: e.clientY, at: e.timeStamp };
+    }
+    function move(e) {
+      if (press && (e.pointerId !== press.id || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 7)) reset();
+    }
+    function up(e) {
+      move(e);
+      const tap = press, ticket = serial;
+      press = null;
+      if (!tap || !enabled() || e.timeStamp - tap.at > 400 || tap.graph !== app.canvas.graph || hit(e) !== tap.node) return;
+      surface.requestAnimationFrame(() => {
+        if (serial === ticket && enabled() && app.canvas.graph === tap.graph && nodeAt(tap.graph, tap.node.id) === tap.node)
+          focus(String(tap.node.id));
+      });
+    }
+    for (const [name, handler] of Object.entries({pointerdown: down, pointermove: move, pointerup: up, pointercancel: reset, wheel: reset, blur: reset}))
+      surface.addEventListener(name, handler, {capture: true, passive: true});
+  }
+
   function restoreExecutionModes(app, prompt, currentOutput = {}) {
     for (const [id, spec] of Object.entries(prompt)) {
       const node = executionNode(app.rootGraph, id);
@@ -335,7 +376,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
+    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -345,7 +386,45 @@
   let mismatch = false;
   let initialPrompt = null;
   let textEditor;
-  let ownedGraphID;
+  let ownedGraphID, overviewGraph, overviewScale;
+  let tapToFocus = false;
+  let updateMap = () => {};
+  function installMiniMap() {
+    if (!app.canvas.canvas || !document.body) return () => {};
+    const map = document.createElement("div");
+    map.id = "pocket-overview-map"; map.setAttribute("aria-hidden", "true");
+    const bitmap = document.createElement("canvas"), label = document.createElement("span");
+    bitmap.width = 176; bitmap.height = 84; map.append(bitmap, label); document.body.append(map);
+    const ctx = bitmap.getContext("2d");
+    let scheduled = false;
+    function draw() {
+      scheduled = false;
+      const c = app.canvas, nodes = c.graph?._nodes ?? [];
+      map.hidden = !loaded || ownedGraphID !== app.rootGraph.id || !nodes.length || textEditor?.busy || document.hidden;
+      if (map.hidden || !ctx) return;
+      const left = Math.min(...nodes.map(n => n.pos[0])), top = Math.min(...nodes.map(n => n.pos[1] - 32));
+      const right = Math.max(...nodes.map(n => n.pos[0] + n.size[0])), bottom = Math.max(...nodes.map(n => n.pos[1] + n.size[1]));
+      const k = Math.min(168 / Math.max(1, right-left), 76 / Math.max(1, bottom-top));
+      const x = (176 - (right-left)*k)/2, y = (84 - (bottom-top)*k)/2;
+      ctx.clearRect(0, 0, 176, 84);
+      ctx.fillStyle = "#b8b6c4";
+      for (const n of nodes) ctx.fillRect(x+(n.pos[0]-left)*k, y+(n.pos[1]-32-top)*k, Math.max(2,n.size[0]*k), Math.max(2,(n.size[1]+32)*k));
+      const rect = c.canvas.getBoundingClientRect(), scale = c.ds.scale;
+      const x0 = Math.max(1,x+(-c.ds.offset[0]-left)*k), y0 = Math.max(1,y+(-c.ds.offset[1]-top)*k);
+      const x1 = Math.min(175,x+(-c.ds.offset[0]+rect.width/scale-left)*k), y1 = Math.min(83,y+(-c.ds.offset[1]+rect.height/scale-top)*k);
+      if (x1>x0 && y1>y0) {
+        ctx.strokeStyle = "#faf8ff"; ctx.fillStyle = "#b7a3f238"; ctx.lineWidth = 2;
+        ctx.fillRect(x0,y0,x1-x0,y1-y0); ctx.strokeRect(x0,y0,x1-x0,y1-y0);
+      }
+      label.textContent = Math.round(scale*100) + "%";
+    }
+    function schedule() {
+      if (!scheduled) { scheduled = true; requestAnimationFrame(draw); }
+    }
+    for (const name of ["wheel","pointerup","focusin","focusout","resize"]) window.addEventListener(name, schedule, {passive:true,capture:true});
+    window.addEventListener("pointermove", e => { if (e.buttons) schedule(); }, {passive:true,capture:true});
+    return schedule;
+  }
   const startup = { app: null, registered: false, complete: false, failure: null };
   function followStartup(candidate) {
     if (!candidate || startup.app === candidate) return;
@@ -393,6 +472,11 @@
         markWorkspace();
         app.canvas.resize?.();
         textEditor = installTextEditing(app);
+        updateMap = installMiniMap(); updateMap();
+        installOverviewTap(app, () => tapToFocus && overviewGraph === app.canvas.graph && overviewScale === app.canvas.ds.scale && loaded &&
+          ownedGraphID === app.rootGraph.id && !textEditor.busy, id => {
+            if (focusNode(app, id)) { overviewGraph = null; updateMap(); send("overviewFocus", {nodeID: id}); }
+          });
         return app;
       }
       const message = (startup.complete || coordinatesReady(app)) && !workspaceRestored(app)
@@ -516,12 +600,13 @@
     delete: "Comfy.Canvas.DeleteSelectedItems"
   };
   window.PocketCanvas = {
+    overviewPreference(enabled) { tapToFocus = !!enabled; return true; },
     nodeAppearance(enabled, palette) { return setNodeAppearance(app?.canvas, enabled, palette); },
     async load(text) {
       await ready;
       textEditor?.reset();
       const value = JSON.parse(text);
-      loaded = false;
+      loaded = false; overviewGraph = null;
       initialPrompt = value.prompt;
       if (value.workflow?.nodes) {
         // Lazy's director restores its DOM timeline from named serialized properties.
@@ -604,6 +689,7 @@
     fit() {
       if (textEditor?.busy) return true;
       const canvas = app.canvas, nodes = canvas.graph?._nodes ?? [];
+      overviewGraph = canvas.graph; updateMap();
       if (!nodes.length) return true;
       const minX = Math.min(...nodes.map(node => node.pos[0])) - 40;
       const minY = Math.min(...nodes.map(node => node.pos[1])) - 60;
@@ -611,11 +697,13 @@
       const maxY = Math.max(...nodes.map(node => node.pos[1] + node.size[1])) + 40;
       const rect = canvas.canvas.getBoundingClientRect();
       canvas.ds.scale = Math.min(1, Math.max(0.02, Math.min(rect.width / Math.max(1, maxX - minX), rect.height / Math.max(1, maxY - minY))));
+      overviewScale = canvas.ds.scale;
       canvas.ds.offset[0] = -minX + (rect.width / canvas.ds.scale - (maxX - minX)) / 2;
       canvas.ds.offset[1] = -minY + (rect.height / canvas.ds.scale - (maxY - minY)) / 2;
       canvas.setDirty(true, true); return true;
     },
     zoom(factor) {
+      overviewGraph = null;
       const canvas = app.canvas;
       const rect = canvas.canvas.getBoundingClientRect();
       canvas.ds.changeScale(canvas.ds.scale * factor, [rect.width / 2, rect.height / 2]);
@@ -636,7 +724,19 @@
         type, title: node.title || type, category: node.category || "其他"
       })).sort((a, b) => a.title.localeCompare(b.title)));
     },
-    scene() { return JSON.stringify(mobileScene(app)); },
+    scene() { updateMap(); return JSON.stringify(mobileScene(app)); },
+    async stepParameter(id, type, name, direction, path) {
+      if (!loaded || app.rootGraph.id !== ownedGraphID || ![-1, 1].includes(direction) ||
+          JSON.stringify(bookmarkLocations(app).graphPath) !== JSON.stringify(path)) throw new Error("画布已切换，请重新选择节点。");
+      const node = nodeAt(app.canvas.graph, id);
+      const widget = node?.widgets?.find(w => w.name === name);
+      if (node?.type !== type || !["steps", "cfg"].includes(name) || !Number.isFinite(widget?.value)) throw new Error("节点参数已变化。");
+      const customStep = widget.options?.step2;
+      const step = Number.isFinite(customStep) && customStep > 0 ? customStep : (name === "steps" ? 1 : 0.1);
+      const value = Math.max(widget.options?.min ?? -Infinity, Math.min(widget.options?.max ?? Infinity, Number((widget.value + direction * step).toFixed(8))));
+      if (value !== widget.value) await setMobileWidget(app, id, 0, value, name);
+      return true;
+    },
     async widget(id, index, value, name) { return await setMobileWidget(app, id, index, value, name); },
     moveNode(id, x, y) { return moveMobileNode(app, id, x, y); },
     nodeMode(id, mode) {
@@ -666,11 +766,14 @@
     },
     focus(id) {
       if (textEditor?.busy) return true;
+      overviewGraph = null; updateMap();
       return focusNode(app, id);
     },
     focusBookmark(path, id, type) {
       if (textEditor?.busy) return false;
-      return focusBookmark(app, path, id, type);
+      const focused = focusBookmark(app, path, id, type);
+      if (focused) overviewGraph = null;
+      return focused;
     },
     viewport() { return textEditor?.resized() ?? false; },
     finishText() { return textEditor?.finish() ?? true; },
@@ -707,6 +810,10 @@
     #lazy-res-monitor, rgthree-progress-bar { display: none !important; }
     .pocket-canvas-compact #graph-canvas-container .selection-toolbox,
     .pocket-canvas-compact #graph-canvas-container [role="toolbar"]:has([data-testid="zoom-controls-button"]) { display: none !important; }
+    #pocket-overview-map { position:fixed; z-index:5; bottom:8px; left:10px; pointer-events:none; background:#222329de; border:1px solid #a5a7bb70; border-radius:8px; color:white; padding:4px 5px; display:none; font:10px system-ui; text-align:right; }
+    .pocket-canvas-isolated #pocket-overview-map:not([hidden]) { display:block; }
+    #pocket-overview-map canvas { width:88px; height:42px; display:block; }
+    @media (max-height:340px) { #pocket-overview-map { visibility:hidden; } }
     canvas { touch-action: none; } input, textarea, select { font-size: max(16px, 1em); }
     .pocket-canvas-text-edit { font-size: var(--pocket-input-font) !important; }
     textarea.pocket-canvas-text-edit { max-height: var(--pocket-input-height) !important; min-height: 0 !important; resize: none !important; box-sizing: border-box !important; }

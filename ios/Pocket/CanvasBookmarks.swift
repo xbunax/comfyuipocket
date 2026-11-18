@@ -37,7 +37,8 @@ struct CanvasBookmarkSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if let node = session.scene.nodes.first(where: { $0.id == session.focusedNodeID }) {
+                if search.isEmpty, let node = session.scene.nodes.first(where: { $0.id == session.focusedNodeID }),
+                   !bookmarks.contains(where: { isFocused($0.location) }) {
                     Section("当前定位节点") {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
@@ -70,7 +71,10 @@ struct CanvasBookmarkSheet: View {
                                 }
                             } label: {
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text(resolved?.title ?? bookmark.location.title).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text)
+                                    HStack {
+                                        Text(resolved?.title ?? bookmark.location.title).font(.subheadline.weight(.medium)).foregroundStyle(PocketPalette.text)
+                                        if isFocused(bookmark.location) { Text("当前").font(.caption2).foregroundStyle(PocketPalette.accent) }
+                                    }
                                     Text(resolved == nil ? "节点已移除或类型改变" : "#\(bookmark.location.nodeID) · \(breadcrumb(bookmark.location))")
                                         .font(.caption).foregroundStyle(PocketPalette.secondary)
                                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
@@ -90,7 +94,7 @@ struct CanvasBookmarkSheet: View {
             }.listStyle(.insetGrouped).scrollContentBackground(.hidden)
                 .foregroundStyle(PocketPalette.text)
                 .navigationTitle("收藏节点 · \(bookmarks.count)").navigationBarTitleDisplayMode(.inline)
-                .searchable(text: $search, prompt: "搜索收藏名称、类型或编号")
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索收藏名称、类型或编号")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
                 .task { await session.refreshScene() }
                 .onChange(of: search) { _, value in if !value.isEmpty { detent = .large } }

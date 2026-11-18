@@ -74,10 +74,41 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
         await stream.send().finish()
         response = await asyncio.wait_for(pairing.read_frame(stream.recv()), 5)
         self.assertTrue(response["ok"]); self.assertTrue(response["directOnly"])
+        self.assertEqual(response["speedTest"], 1)
         self.assertEqual(response["endpointId"], str(connection.remote_id()))
         self.assertTrue(any(p.is_selected and p.is_ip for p in connection.paths()))
         self.assertFalse(any(p.is_relay for p in connection.paths()))
         return connection
+
+    async def test_authenticated_speed_test_and_early_close_leave_session_usable(self):
+        conn = await self.authenticate(self.invite["token"])
+        async def open_probe():
+            stream = await conn.open_bi()
+            await stream.send().write_all(b"\0")
+            return stream, await asyncio.wait_for(stream.recv().read_exact(1), 4)
+        stream, ready = await open_probe()
+        self.assertEqual(ready, b"R")
+        other, busy = await open_probe()
+        self.assertEqual(busy, b"B")
+        await other.send().finish()
+        for i in range(1, 6):
+            await stream.send().write_all(bytes([i]))
+            self.assertEqual(await stream.recv().read_exact(1), bytes([i]))
+        await stream.send().write_all(b"D")
+        payload = await stream.recv().read_exact(2 * 1024 * 1024)
+        self.assertEqual(len(payload), 2 * 1024 * 1024)
+        await stream.send().write_all(payload)
+        await stream.send().finish()
+        self.assertEqual(await stream.recv().read_exact(1), b"U")
+        stream, ready = await open_probe()
+        self.assertEqual(ready, b"R")
+        await stream.send().finish()
+        with self.assertRaises(Exception):
+            await asyncio.wait_for(stream.recv().read_exact(1), 4)
+        stream = await conn.open_bi()
+        await stream.send().write_all(b"GET /stats HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        await stream.send().finish()
+        self.assertIn(b'"device": "test"', await asyncio.wait_for(stream.recv().read_to_end(4096), 4))
 
     async def start_proxy(self):
         self.connection = await self.authenticate(self.invite["token"])

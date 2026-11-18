@@ -17,6 +17,7 @@ from pathlib import Path
 
 ALPN = b"comfyuipocket/tcp/1"
 MAX_FRAME = 8192
+PROBE_BYTES = 2 * 1024 * 1024
 log = logging.getLogger(__name__)
 
 
@@ -52,6 +53,7 @@ class PairingServer:
         self.secret = None
         self.enabled = False
         self.udp_ports = {}
+        self.probe_lock = asyncio.Lock()
 
     def _read_identity(self):
         if not self.path.exists():
@@ -214,7 +216,7 @@ class PairingServer:
                     old.close(0, b"reconnected")
                 self.connections[peer] = connection
             phase = "reply"
-            await write_frame(first.send(), {"ok": True, "v": 1, "directOnly": True,
+            await write_frame(first.send(), {"ok": True, "v": 1, "directOnly": True, "speedTest": 1,
                 "endpointId": str(self.endpoint.id()), "name": "ComfyUI",
                 "ticket": str(self.iroh.EndpointTicket.from_addr(self.endpoint.addr()))})
             await first.send().finish()
@@ -252,11 +254,25 @@ class PairingServer:
 
     async def _forward(self, stream):
         writer = None
-        phase = "comfyui_socket"
+        phase = "stream"
         try:
+            # Authenticated streams normally start with an HTTP method. A NUL
+            # selects the in-memory diagnostic; it never opens a ComfyUI socket.
+            first = await asyncio.wait_for(stream.recv().read_exact(1), 10)
+            if first == b"\0":
+                phase = "speed_test"
+                if self.probe_lock.locked():
+                    await stream.send().write_all(b"B")
+                    await stream.send().finish()
+                    return
+                async with self.probe_lock:
+                    await asyncio.wait_for(self._speed_test(stream), 85)
+                return
+            phase = "comfyui_socket"
             reader, writer = await asyncio.wait_for(asyncio.open_connection(
                 "127.0.0.1", self.port, ssl=self.ssl_context,
                 server_hostname="localhost" if self.ssl_context else None), 5)
+            writer.write(first)
             phase = "forward"
             async def to_tcp():
                 while data := await stream.recv().read(65536):
@@ -281,6 +297,27 @@ class PairingServer:
             if writer is not None:
                 writer.close()
                 with contextlib.suppress(Exception): await writer.wait_closed()
+
+    @staticmethod
+    async def _speed_test(stream):
+        recv, send = stream.recv(), stream.send()
+        await send.write_all(b"R")
+        for i in range(1, 6):
+            ping = await recv.read_exact(1)
+            if ping != bytes([i]):
+                raise ValueError("Unexpected probe sequence")
+            await send.write_all(ping)
+        if await recv.read_exact(1) != b"D":
+            raise ValueError("Expected download request")
+        await send.write_all(bytes(PROBE_BYTES))
+        remaining = PROBE_BYTES
+        while remaining:
+            data = await recv.read(min(remaining, 65536))
+            if not data:
+                raise ValueError("Incomplete upload")
+            remaining -= len(data)
+        await send.write_all(b"U")
+        await send.finish()
 
     async def revoke(self, peer):
         async with self.lock:

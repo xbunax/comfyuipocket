@@ -360,7 +360,7 @@ struct GalleryView: View {
     @State private var section = "tasks"
     @State private var selected: OutputImage?
     @State private var sheetOutput: OutputImage?
-    @State private var selectedRecord: MediaProvenance?
+    @State private var sequence: ArtworkSequence?
     @State private var selectionAllowsDeletion = true
     @State private var removing: OutputImage?
     @State private var expanded: Set<String> = []
@@ -379,16 +379,18 @@ struct GalleryView: View {
         HStack(spacing: 0) {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("作品来源", selection: $section) {
-                    Text("任务作品").tag("tasks")
-                    Text("历史 Output").tag("output")
-                }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(.bar)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { galleryTitle; Spacer(minLength: 0); gallerySources }
+                    VStack(alignment: .leading, spacing: 2) {
+                        galleryTitle
+                        HStack { gallerySources }
+                    }
+                }.padding(.horizontal, 16).padding(.vertical, 6)
                 Divider()
             ZStack {
                 PocketBackground()
                 if section == "output" {
-                    OutputBrowserView(onPreview: { output, record in preview(output, record: record, allowDeletion: false) })
+                    OutputBrowserView { preview($0, allowDeletion: false) }
                         .id(store.client?.serverID ?? "")
                 } else if groups.isEmpty {
                     ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
@@ -407,7 +409,9 @@ struct GalleryView: View {
                             ForEach(groups) { group in
                                 GalleryTaskCard(group: group, expanded: Binding(get: { expanded.contains(group.id) }, set: {
                                     if $0 { expanded.insert(group.id) } else { expanded.remove(group.id) }
-                                }), selected: Binding(get: { selected }, set: { if let output = $0 { preview(output) } }), removing: $removing,
+                                }), selected: Binding(get: { selected }, set: { if let output = $0 {
+                                    preview(ArtworkSequence(selected: output, items: MediaOrdering.outputs(group.outputs, key: order, ascending: ascending, sizes: sizes)))
+                                } }), removing: $removing,
                                     sortKey: order, ascending: ascending, sizes: sizes)
                             }
                         }.padding(16)
@@ -416,26 +420,23 @@ struct GalleryView: View {
                 }
             }
             }.navigationTitle("作品").navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    if section == "tasks" {
-                        MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
-                        Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(); sizeRefresh = UUID() } }.disabled(!store.connected)
-                    }
-                }
-                .sheet(item: $sheetOutput) { ImageDetail(output: $0, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord) }
+                .toolbar(.hidden, for: .navigationBar)
+                .sheet(item: $sheetOutput) { _ in if let sequence { viewer(sequence) } }
                 .workDeletionDialog($removing)
-                .onChange(of: store.client?.serverID) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; selectedRecord = nil; sizes = [:] }
+                .onChange(of: store.client?.serverID) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; sequence = nil; sizes = [:] }
                 .onChange(of: store.images.map(\.id)) { _, ids in
-                    if selectionAllowsDeletion, let selected, !ids.contains(selected.id) { self.selected = nil; sheetOutput = nil }
+                    if selectionAllowsDeletion, let sequence {
+                        let liveIDs = Set(store.currentMediaArchive.outputs.map(\.id))
+                        sequence.items.removeAll { !liveIDs.contains($0.id) }
+                        if !liveIDs.contains(sequence.selected.id) { selected = nil; sheetOutput = nil; self.sequence = nil }
+                    }
                 }
         }
         .frame(maxWidth: layout.usesColumns ? min(520, max(300, layout.width * 0.42)) : .infinity)
         if layout.usesColumns {
             Divider()
-            if let selected {
-                ImageDetail(output: selected, allowDeletion: selectionAllowsDeletion, knownRecord: selectedRecord,
-                            onClose: { self.selected = nil })
-                    .id("\(store.client?.serverID ?? "")|\(selected.id)")
+            if selected != nil, let sequence {
+                viewer(sequence, onClose: { self.selected = nil; self.sequence = nil })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView("选择图片或视频", systemImage: "photo.on.rectangle.angled",
@@ -456,9 +457,27 @@ struct GalleryView: View {
             sizes = result; readingSizes = false
         }
     }
-    private func preview(_ output: OutputImage, record: MediaProvenance? = nil, allowDeletion: Bool = true) {
-        selectedRecord = record; selectionAllowsDeletion = allowDeletion; selected = output
-        if !layout.usesColumns { sheetOutput = output }
+    private var galleryTitle: some View {
+        Text("作品").font(.title2.bold()).fixedSize().accessibilityAddTraits(.isHeader)
+    }
+    @ViewBuilder private var gallerySources: some View {
+        Picker("作品来源", selection: $section) {
+            Text("任务作品").tag("tasks"); Text("Output").tag("output")
+        }.pickerStyle(.segmented).frame(maxWidth: 190)
+        if section == "tasks" {
+            Menu {
+                MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
+                Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(); sizeRefresh = UUID() } }.disabled(!store.connected)
+            } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
+        }
+    }
+    private func preview(_ items: ArtworkSequence, allowDeletion: Bool = true) {
+        sequence = items; selectionAllowsDeletion = allowDeletion; selected = items.selected
+        if !layout.usesColumns { sheetOutput = items.selected }
+    }
+    private func viewer(_ items: ArtworkSequence, onClose: (() -> Void)? = nil) -> some View {
+        ImageDetail(output: items.selected, allowDeletion: selectionAllowsDeletion, onClose: onClose, sequence: items)
+            .id(items.selected.id)
     }
 }
 
@@ -520,16 +539,80 @@ private struct GalleryTaskCard: View {
     }
 }
 
+@MainActor @Observable final class ArtworkSequence {
+    var selected: OutputImage
+    var items: [OutputImage]
+    private(set) var next: Int?
+    private(set) var loading = false
+    private(set) var error: String?
+    private let page: ((Int) async throws -> OutputDirectoryPage)?
+    init(selected: OutputImage, items: [OutputImage], next: Int? = nil, page: ((Int) async throws -> OutputDirectoryPage)? = nil) {
+        self.selected = selected; self.items = items; self.next = next; self.page = page
+    }
+    func loadMore() async {
+        guard !loading, let next, let page else { return }
+        loading = true; error = nil
+        defer { loading = false }
+        do {
+            let result = try await page(next)
+            try Task.checkCancellation()
+            var seen = Set(items.map(\.assetID))
+            items += result.entries.filter { !$0.isFolder }.map(\.output).filter { seen.insert($0.assetID).inserted }
+            self.next = result.nextOffset.flatMap { $0 > next ? $0 : nil }
+        } catch {
+            if !Task.isCancelled { self.error = error.localizedDescription }
+        }
+    }
+}
+
+private struct ArtworkFilmstrip: View {
+    let sequence: ArtworkSequence
+    var body: some View {
+        VStack(spacing: 2) {
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 6) {
+                        ForEach(sequence.items) { item in
+                            Button { sequence.selected = item } label: {
+                                RemoteImage(output: item, fill: true).frame(width: 46, height: 46)
+                                    .clipShape(.rect(cornerRadius: 6))
+                                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
+                                        item.id == sequence.selected.id ? PocketPalette.accent : .clear, lineWidth: 3))
+                            }.buttonStyle(.plain).id(item.id).accessibilityLabel(item.filename)
+                                .accessibilityAddTraits(item.id == sequence.selected.id ? .isSelected : [])
+                        }
+                        if sequence.next != nil {
+                            Button(sequence.loading ? "读取中…" : (sequence.error == nil ? "加载更多" : "重试")) {
+                                Task { await sequence.loadMore() }
+                            }.disabled(sequence.loading).font(.caption)
+                        }
+                    }.padding(.horizontal, 14)
+                }.frame(height: 50)
+                    .onAppear { proxy.scrollTo(sequence.selected.id, anchor: .center) }
+            }
+            if let error = sequence.error { Text(error).font(.caption2).lineLimit(2) }
+        }
+    }
+}
+
 struct RemoteImage: View {
     @Environment(PocketStore.self) private var store
     let output: OutputImage
+    var fill = false
     @State private var image: UIImage?
     @State private var failed = false
     var body: some View {
         ZStack {
             Color.secondary.opacity(0.08)
             if let image {
-                Image(uiImage: image).resizable().scaledToFit()
+                if fill {
+                    GeometryReader { geometry in
+                        Image(uiImage: image).resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                    }
+                } else {
+                    Image(uiImage: image).resizable().scaledToFit()
+                }
                 if output.isVideo { Image(systemName: "play.circle.fill").font(.largeTitle).foregroundStyle(.white).shadow(radius: 3) }
             }
             else if failed { Image(systemName: "photo.badge.exclamationmark").foregroundStyle(PocketPalette.secondary) }
@@ -555,6 +638,7 @@ struct ImageDetail: View {
     var allowDeletion = true
     var knownRecord: MediaProvenance? = nil
     var onClose: (() -> Void)? = nil
+    var sequence: ArtworkSequence? = nil
     @State private var image: UIImage?
     @State private var shareURL: URL?
     @State private var status = ""
@@ -566,13 +650,20 @@ struct ImageDetail: View {
     var body: some View {
         NavigationStack {
             VStack {
-                Spacer()
-                if let player { VideoPlayer(player: player) }
-                else if let image { ZoomableArtwork(image: image).frame(maxWidth: .infinity, maxHeight: .infinity) }
-                else if status.isEmpty { ProgressView() }
-                Spacer()
-                Text(output.filename).font(.caption).textSelection(.enabled).lineLimit(2)
+                ZStack {
+                    Color(white: 0.06)
+                    if let player { VideoPlayer(player: player) }
+                    else if let image { ZoomableArtwork(image: image) }
+                    else if status.isEmpty { ProgressView().tint(.white) }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let sequence, sequence.items.count > 1 || sequence.next != nil {
+                    ArtworkFilmstrip(sequence: sequence)
+                }
                 HStack(spacing: 12) {
+                    if let sequence, let index = sequence.items.firstIndex(where: { $0.id == output.id }) {
+                        Text("\(index + 1) / \(sequence.items.count)\(sequence.next == nil ? "" : "+")")
+                            .font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary)
+                    }
                     if let resolution = fileInfo.resolution { Text(resolution).font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary) }
                     if !output.isVideo { Text("双指缩放 · 双击放大").font(.caption2).foregroundStyle(PocketPalette.secondary) }
                     Spacer()
@@ -596,7 +687,7 @@ struct ImageDetail: View {
                     if let shareURL { ShareLink(item: shareURL) { Label("分享", systemImage: "square.and.arrow.up") }.buttonStyle(.glass) }
                 }.padding()
                 if !status.isEmpty { Text(status).font(.caption).padding() }
-            }.navigationTitle("作品预览").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(output.filename).navigationBarTitleDisplayMode(.inline)
                 .edgeSwipeBack { close() }
                 .toolbar {
                     if allowDeletion {
@@ -615,6 +706,9 @@ struct ImageDetail: View {
                         var archive = store.currentMediaArchive
                         archive.rememberTasks(store.currentGenerationTasks)
                         record = knownRecord ?? archive.provenance?[output.promptID]
+                        if record == nil, let original = archive.outputs.first(where: { $0.assetID == output.assetID }) {
+                            record = archive.provenance?[original.promptID]
+                        }
                         let file = try await api.download(output)
                         guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return }
                         shareURL = file

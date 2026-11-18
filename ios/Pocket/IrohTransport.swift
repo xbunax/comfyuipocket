@@ -9,13 +9,41 @@ import WebKit
 @MainActor @Observable
 final class IrohTransport {
     private(set) var peer: IrohPeerProfile
-    private(set) var status = "准备直连…"
+    struct Event: Identifiable {
+        let id = UUID()
+        let time = Date()
+        let message: String
+    }
+    private(set) var events: [Event] = []
+    private(set) var status = "准备直连…" {
+        didSet {
+            guard status != oldValue else { return }
+            events.append(Event(message: status))
+            if events.count > 32 { events.removeFirst() }
+        }
+    }
+    let speedTest = DirectSpeedTest()
+    private(set) var supportsSpeedTest = false
+    var directReady: Bool {
+        guard let connection, !stopped, connection.closeReason() == nil else { return false }
+        return connection.paths().contains { $0.isIp && $0.isSelected }
+    }
+    var canRetryNow: Bool { !stopped && connection == nil && retryAfter != nil }
+    func retryNow() async {
+        guard canRetryNow else { return }
+        retryAfter = nil
+        _ = try? await ensureConnection()
+    }
+    func testSpeed() {
+        guard directReady, supportsSpeedTest, let connection else { return }
+        speedTest.start(on: connection)
+    }
     private(set) var authenticated = false
     private(set) var baseURL: URL?
     private(set) var access: LoopbackAccess?
     @ObservationIgnored private var enrollmentToken: String?
     @ObservationIgnored private var endpoint: Endpoint?
-    @ObservationIgnored private var connection: IrohLib.Connection?
+    private var connection: IrohLib.Connection?
     @ObservationIgnored private var connecting: Task<IrohLib.Connection, Error>?
     @ObservationIgnored private var monitor: Task<Void, Never>?
     @ObservationIgnored private var listener: NWListener?
@@ -23,7 +51,7 @@ final class IrohTransport {
     @ObservationIgnored private var channels: [UUID: (NWConnection, Task<Void, Never>)] = [:]
     @ObservationIgnored private var stopped = false
     @ObservationIgnored private var cookie: HTTPCookie?
-    @ObservationIgnored private var retryAfter: ContinuousClock.Instant?
+    private var retryAfter: ContinuousClock.Instant?
     @ObservationIgnored private var retryDelay = 1
     @ObservationIgnored var onReconnect: ((IrohPeerProfile) -> Void)?
     private static let alpn = Data("comfyuipocket/tcp/1".utf8)
@@ -47,7 +75,9 @@ final class IrohTransport {
         resumeMonitoring()
     }
 
-    func stop() {
+    func stop(status finalStatus: String = "已断开") {
+        speedTest.clear()
+        enrollmentToken = nil
         stopped = true; monitor?.cancel(); monitor = nil; connecting?.cancel(); connecting = nil
         listenerReady?.resume(throwing: CancellationError()); listenerReady = nil
         listener?.cancel(); listener = nil
@@ -55,10 +85,11 @@ final class IrohTransport {
         try? connection?.close(errorCode: 0, reason: Data("disconnected".utf8)); connection = nil
         if let endpoint { Task { try? await endpoint.close() } }; endpoint = nil
         if let cookie { Task { await WKWebsiteDataStore.default().httpCookieStore.delete(cookie) } }; cookie = nil
-        status = "已断开"
+        status = finalStatus
     }
 
     func suspendMonitoring() {
+        speedTest.cancel()
         monitor?.cancel()
         monitor = nil
     }
@@ -101,6 +132,7 @@ final class IrohTransport {
                     }
                     let expired = missingSince.map { $0.duration(to: now) >= .seconds(15) } ?? false
                     if connection.closeReason() != nil || paths.contains(where: \.isRelay) || expired {
+                        self.speedTest.clear()
                         try? connection.close(errorCode: 1, reason: Data("direct path lost".utf8))
                         self.connection = nil
                         self.status = "直连已断开，正在重连…"
@@ -127,13 +159,16 @@ final class IrohTransport {
                 if self.endpoint == nil { self.endpoint = try await self.bindEndpoint() }
                 guard let endpoint = self.endpoint else { throw CancellationError() }
                 let connection = try await self.openDirectConnection(endpoint)
-                let freshTicket = try await self.authorize(connection)
+                self.status = "正在验证配对身份…"
+                let (freshTicket, probeSupported) = try await self.authorize(connection)
                 guard !self.stopped, !Task.isCancelled else {
                     try? connection.close(errorCode: 0, reason: Data())
                     throw CancellationError()
                 }
                 let reconnecting = self.authenticated
                 self.peer.ticket = freshTicket
+                self.speedTest.clear()
+                self.supportsSpeedTest = probeSupported
                 self.authenticated = true
                 self.enrollmentToken = nil
                 self.connection = connection
@@ -217,7 +252,7 @@ final class IrohTransport {
         }
     }
 
-    private func authorize(_ connection: IrohLib.Connection) async throws -> String {
+    private func authorize(_ connection: IrohLib.Connection) async throws -> (String, Bool) {
         let expectedID = peer.endpointId
         let token = enrollmentToken
         do {
@@ -236,7 +271,7 @@ final class IrohTransport {
                 guard fresh.id().description == expectedID, fresh.relayUrl() == nil else {
                     throw PocketError.message("电脑返回了无效的直连地址。")
                 }
-                return ticket
+                return (ticket, response["speedTest"] == .integer(1))
             }
         } catch {
             try? connection.close(errorCode: 1, reason: Data("authorization incomplete".utf8))

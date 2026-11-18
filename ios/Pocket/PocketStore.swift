@@ -28,6 +28,22 @@ final class PocketStore {
     @ObservationIgnored let canvasSessions = CanvasSessionCache()
     var prompts: [SavedPrompt] = []
     var pinnedWorkflows: [String] = []
+    private var lastWorkflows = UserDefaults.standard.dictionary(forKey: "library.lastWorkflow") as? [String: String] ?? [:]
+    var lastOpenedWorkflow: Workflow? {
+        let last = lastWorkflows[client?.serverID ?? "local"]
+        return workflows.first { $0.id == last }
+    }
+    func rememberOpened(_ id: String) {
+        let server = client?.serverID ?? "local"
+        guard lastWorkflows[server] != id else { return }
+        lastWorkflows[server] = id
+        UserDefaults.standard.set(lastWorkflows, forKey: "library.lastWorkflow")
+    }
+    func lastOutput(for workflowID: String) -> OutputImage? {
+        let archive = currentMediaArchive
+        return archive.outputs.first { archive.provenance?[$0.promptID]?.workflowID == workflowID }
+            ?? images(forWorkflow: workflowID).first
+    }
     var nodeBookmarks = NodeBookmarkLibrary()
     var generationTasks: [GenerationTask] = []
     var mediaArchives: [String: MediaArchive] = [:]
@@ -254,7 +270,10 @@ final class PocketStore {
                 notice = "未检测到 Pocket 插件，工作流自动同步已停用。"
             }
         } catch {
-            if lastConnection == attempt { irohTransport?.stop(); irohTransport = nil; self.error = error.localizedDescription }
+            if lastConnection == attempt {
+                irohTransport?.stop(status: "本次连接未完成")
+                self.error = error.localizedDescription
+            }
         }
     }
     func disconnect() {

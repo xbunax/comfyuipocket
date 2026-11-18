@@ -2,28 +2,30 @@ import SwiftUI
 
 struct CanvasHardwareBar: View {
     let hardware: ServerHardware
+    var compact = false
     var body: some View {
-        HStack(spacing: 14) {
-            metric("GPU", value: hardware.gpu)
-            metric("CPU", value: hardware.cpu)
-            metric("VRAM", value: hardware.vram)
-            metric("RAM", value: hardware.ram)
-        }.accessibilityElement(children: .combine)
+        HStack(spacing: 9) {
+            Image(systemName: "cpu")
+            metric("GPU", percent(hardware.gpu))
+            metric("显存", memory(hardware.vramUsed, hardware.vramTotal))
+            if !compact {
+                metric("CPU", percent(hardware.cpu))
+                metric("内存", memory(hardware.ramUsed, hardware.ramTotal))
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.caption2)
+        }.font(.caption2).foregroundStyle(PocketPalette.secondary)
+            .accessibilityElement(children: .combine)
     }
-    private func metric(_ title: String, value: Double?) -> some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 3) {
-                Text(title).foregroundStyle(PocketPalette.secondary)
-                Spacer(minLength: 0)
-                Text(value.map { "\(Int($0.rounded()))%" } ?? "—").monospacedDigit().foregroundStyle(PocketPalette.text)
-            }.font(.caption2.weight(.medium))
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary)
-                    if let value { Capsule().fill(PocketPalette.accent).frame(width: proxy.size.width * value / 100) }
-                }
-            }.frame(height: 3)
-        }.frame(maxWidth: .infinity)
+    private func metric(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(name); Text(value).monospacedDigit().foregroundStyle(PocketPalette.text)
+        }.lineLimit(1)
+    }
+    private func percent(_ value: Double?) -> String { value.map { "\(Int($0.rounded()))%" } ?? "—" }
+    private func memory(_ used: Double?, _ total: Double?) -> String {
+        guard let used, let total, ServerHardware.ratio(used, total: total) != nil else { return "—" }
+        return String(format: "%.1f/%.0f GB", used / 1_073_741_824, total / 1_073_741_824)
     }
 }
 

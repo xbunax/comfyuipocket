@@ -1,8 +1,6 @@
-ComfyUI Pocket v0.14.2
+ComfyUI Pocket v0.15.0
 
-- Preserve the computer’s IPv4 and IPv6 UDP ports across ComfyUI restarts. If a port is occupied, retain the other family where possible and save the new ports for the next restart.
-- Retry saved addresses first, then perform fresh iroh address lookup using the same paired identity. Foreground sessions reconnect with backoff and save the refreshed ticket immediately. If neither route is reachable, scanning a new code for the same computer refreshes its address.
-- Add P2P phase logs in the ComfyUI log and on iOS. Log timestamps, stages and failure categories without printing keys, tickets or QR tokens.
-- Update the computer plugin to 0.9.1 and restart ComfyUI once. Existing identities and approved devices are migrated in place. The first restart after upgrading from 0.9.0 may require one address refresh because older versions did not save UDP ports.
-
-Device IPA build with no simulator run. Connections require a direct IP path.
+- Test the active paired iroh connection from the Connection tab. The app reports median round-trip latency, download Mbps and acknowledged upload Mbps. A manual test sends 2 MiB each way. Plugin 0.10.0 adds the authenticated diagnostic stream. Existing pairings and older clients remain compatible.
+- See actual connection stages, inspect the current session log and retry during backoff.
+- Settings → Appearance → Workflow Canvas adds optional tap-to-focus in overview. It starts off. A tap on a node title or body focuses the original node and updates navigation; editing, links, drags and two-finger gestures keep their native behavior.
+- Resume a workflow from the workbench, see batch progress, and browse Output with a thumbnail filmstrip. The compact canvas adds a live minimap and a single-line hardware summary. On wide windows the inspector shows bookmarked nodes, available sampling controls and the latest output.

@@ -14,7 +14,8 @@ import Foundation
         continuation?.resume(with: value); continuation = nil
         work?.cancel(); timer?.cancel(); work = nil; timer = nil
     }
-    static func run(_ seconds: Double, body: @escaping @MainActor @Sendable () async throws -> Value) async throws -> Value {
+    static func run(_ seconds: Double, timeoutMessage: String = "建立直连超时，未使用中继。",
+                    body: @escaping @MainActor @Sendable () async throws -> Value) async throws -> Value {
         let race = PairingDeadline<Value>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -26,7 +27,7 @@ import Foundation
                 race.timer = Task { @MainActor in
                     do { try await Task.sleep(for: .seconds(seconds)) }
                     catch { return }
-                    race.finish(.failure(PocketError.message("建立直连超时，未使用中继。")))
+                    race.finish(.failure(PocketError.message(timeoutMessage)))
                 }
             }
         } onCancel: { Task { @MainActor in race.finish(.failure(CancellationError())) } }
