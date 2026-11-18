@@ -2,17 +2,18 @@ import SwiftUI
 
 struct OutputBrowserView: View {
     @Environment(PocketStore.self) private var store
+    @Binding var folder: String
     let onPreview: (ArtworkSequence) -> Void
     @AppStorage("outputBrowserLayout") private var displayLayout = "grid"
     @AppStorage("mediaSortKey") private var sortKey = "time"
     @AppStorage("mediaSortAscending") private var ascending = false
-    @State private var folder = ""
     @State private var entries: [OutputDirectoryEntry] = []
     @State private var total = 0
     @State private var nextOffset: Int?
     @State private var loading = false
     @State private var message: String?
     @State private var requestID = UUID()
+    @State private var removing: OutputImage?
     private var folders: [OutputDirectoryEntry] { entries.filter(\.isFolder) }
     private var files: [OutputDirectoryEntry] { entries.filter { !$0.isFolder } }
     private var available: Bool { store.connected && store.pluginCapabilities.contains("output-browser") }
@@ -22,7 +23,7 @@ struct OutputBrowserView: View {
             if !store.connected {
                 ContentUnavailableView("请先连接 ComfyUI", systemImage: "externaldrive.badge.wifi", description: Text("连接后可浏览电脑 output 目录中的历史图片和视频。"))
             } else if !available {
-                ContentUnavailableView("需要更新电脑端插件", systemImage: "arrow.down.circle", description: Text("历史 Output 需要 Pocket 插件 v0.7.0。更新后重启 ComfyUI，并重新连接 App。"))
+                ContentUnavailableView("需要更新电脑端插件", systemImage: "arrow.down.circle", description: Text("文件预览需要 Pocket 插件 v0.7.0。更新后重启 ComfyUI，并重新连接 App。"))
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -59,8 +60,9 @@ struct OutputBrowserView: View {
                 }.contentMargins(.bottom, 28, for: .scrollContent).refreshable { await load() }
             }
         }
-        .task(id: "\(store.client?.serverID ?? "")|\(available)|\(folder)|\(sortKey)|\(ascending)") { await load() }
+        .task(id: "\(store.client?.serverID ?? "")|\(available)|\(folder)|\(sortKey)|\(ascending)|\(store.outputDirectoryRevision)") { await load() }
         .edgeSwipeBack(enabled: !folder.isEmpty) { folder = folder.split(separator: "/").dropLast().joined(separator: "/") }
+        .workDeletionDialog($removing, mode: .serverFile)
     }
 
     private var layoutMenu: some View {
@@ -114,7 +116,7 @@ struct OutputBrowserView: View {
             if displayLayout == "list" {
                 LazyVStack(spacing: 0) {
                     ForEach(files) { entry in
-                        Button { preview(entry.output) } label: {
+                        fileButton(entry) {
                             HStack(spacing: 12) {
                                 RemoteImage(output: entry.output).frame(width: 68, height: 68).clipped().clipShape(.rect(cornerRadius: 12))
                                 VStack(alignment: .leading, spacing: 6) {
@@ -125,21 +127,21 @@ struct OutputBrowserView: View {
                                 }.frame(maxWidth: .infinity, alignment: .leading)
                                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                             }.padding(12).contentShape(Rectangle())
-                        }.buttonStyle(.plain).hoverEffect(.highlight)
+                        }
                         if entry.id != files.last?.id { Divider().padding(.leading, 92) }
                     }
                 }.background(PocketPalette.surface, in: .rect(cornerRadius: 18))
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: displayLayout == "large" ? 260 : 150), spacing: 12)], spacing: 16) {
                     ForEach(files) { entry in
-                        Button { preview(entry.output) } label: {
+                        fileButton(entry) {
                             VStack(alignment: .leading, spacing: 7) {
                                 RemoteImage(output: entry.output, fill: true).frame(height: displayLayout == "large" ? 240 : 150)
                                     .clipped().clipShape(.rect(cornerRadius: 14))
                                 Text(entry.name).font(.caption).foregroundStyle(PocketPalette.text).lineLimit(2)
                                 fileMetadata(entry)
                             }
-                        }.buttonStyle(.plain).hoverEffect(.highlight)
+                        }
                     }
                 }
             }
@@ -153,10 +155,21 @@ struct OutputBrowserView: View {
         }.font(.caption2).foregroundStyle(PocketPalette.secondary)
     }
 
+    private func fileButton<Label: View>(_ entry: OutputDirectoryEntry, @ViewBuilder label: () -> Label) -> some View {
+        Button { preview(entry.output) } label: { label() }
+            .buttonStyle(.plain).hoverEffect(.highlight)
+            .contextMenu {
+                if store.pluginCapabilities.contains("media-delete") {
+                    Button("删除服务器文件", systemImage: "trash", role: .destructive) { removing = entry.output }
+                        .disabled(store.deletingOutputs.contains(entry.output.assetID))
+                }
+            }
+    }
+
     private func preview(_ output: OutputImage) {
         guard let api = store.client else { return }
         let directory = folder, order = sortKey, up = ascending
-        onPreview(ArtworkSequence(selected: output, items: files.map(\.output), next: nextOffset) { offset in
+        onPreview(ArtworkSequence(selected: output, items: files.map(\.output), deletion: .serverFile, next: nextOffset) { offset in
             try await api.outputDirectory(folder: directory, offset: offset, sort: order, ascending: up)
         })
     }
@@ -164,7 +177,11 @@ struct OutputBrowserView: View {
     private var breadcrumbs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Button { folder = "" } label: { Label("Output", systemImage: "externaldrive") }
+                if folder.isEmpty {
+                    Label("文件预览", systemImage: "externaldrive")
+                } else {
+                    Button { folder = "" } label: { Label("文件预览", systemImage: "externaldrive") }
+                }
                 let parts = folder.split(separator: "/").map(String.init)
                 ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)

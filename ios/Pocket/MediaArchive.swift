@@ -15,12 +15,13 @@ struct MediaArchive: Codable, Equatable {
             let prompt = entry["prompt"].array
             let created = prompt.count > 3 ? prompt[3]["create_time"].double : 0
             generationOrder[id] = created > 0 ? created : (prompt.first?.double ?? 0)
-            if prompt.count > 2, !prompt[2].object.isEmpty {
-                let meta = prompt.count > 3 ? prompt[3]["pocket_task"] : .null
-                let record = MediaProvenance(prompt: prompt[2].object, workflowID: meta["workflow_id"].text,
-                    workflowName: meta["name"].text, taskID: meta["id"].text.nonEmpty ?? id,
-                    createdAt: meta["created_at"].double > 0 ? meta["created_at"].double : (created > 100_000_000_000 ? created / 1000 : created))
-                if provenance == nil { provenance = [:] }; provenance?[id] = record
+            if var record = MediaProvenance.historyEntry(entry, id: id) {
+                if let saved = provenance?[id], saved.prompt == record.prompt {
+                    record.outputNodes = record.outputNodes ?? saved.outputNodes
+                    record.displayedText = record.displayedText ?? saved.displayedText
+                }
+                if provenance == nil { provenance = [:] }
+                provenance?[id] = record
             }
             if prompt.count > 3 {
                 let meta = prompt[3]["pocket_task"]
@@ -57,8 +58,12 @@ struct MediaArchive: Codable, Equatable {
                 taskMetadata?[item.id] = MediaTaskMetadata(id: task.id, name: task.name, createdAt: task.createdAt)
                 if !item.prompt.isEmpty {
                     if provenance == nil { provenance = [:] }
-                    provenance?[item.id] = MediaProvenance(prompt: item.prompt, workflowID: task.workflowID,
-                        workflowName: task.name, taskID: task.id, createdAt: task.createdAt)
+                    var record = provenance?[item.id] ?? MediaProvenance(prompt: item.prompt, workflowID: "", workflowName: "", taskID: "", createdAt: 0)
+                    record.workflowID = task.workflowID
+                    record.workflowName = task.name
+                    record.taskID = task.id
+                    record.createdAt = task.createdAt
+                    provenance?[item.id] = record
                 }
             }
         }
@@ -86,6 +91,15 @@ struct MediaArchive: Codable, Equatable {
     func visible(_ items: [OutputImage]) -> [OutputImage] {
         items.filter { !removedOutputIDs.contains($0.id) }
     }
+    func record(for output: OutputImage, embedded: MediaProvenance?) -> MediaProvenance? {
+        let direct = provenance?[output.promptID]
+        let matching = outputs.lazy.filter { $0.assetID == output.assetID }.compactMap { provenance?[$0.promptID] }
+        guard let embedded else { return direct ?? matching.first }
+        // An output path can be reused. A file's embedded execution graph takes
+        // precedence over history entries for another revision of the same path.
+        if direct?.prompt == embedded.prompt { return direct }
+        return matching.first { $0.prompt == embedded.prompt } ?? embedded
+    }
     func visibleHistory(_ history: JSONValue) -> JSONValue {
         .object(history.object.filter { !deletedPromptIDs.contains($0.key) })
     }
@@ -97,12 +111,45 @@ struct MediaProvenance: Codable, Equatable {
     var workflowName: String
     var taskID: String
     var createdAt: Double
+    var outputNodes: [String: [String]]? = nil
+    var requestedOutputs: [String]? = nil
+    var displayedText: [String: String]? = nil
     var workflow: Workflow { Workflow(id: workflowID, name: workflowName, prompt: prompt) }
-    var promptFields: [WorkflowField] {
-        workflow.fields.filter { MobileField.isPrompt($0) || $0.key == "local_prompts" }
+
+    static func historyEntry(_ entry: JSONValue, id: String) -> MediaProvenance? {
+        let submission = entry["prompt"].array
+        guard submission.count > 2, !submission[2].object.isEmpty else { return nil }
+        let meta = submission.count > 3 ? submission[3]["pocket_task"] : .null
+        let created = submission.count > 3 ? submission[3]["create_time"].double : 0
+        var record = MediaProvenance(prompt: submission[2].object, workflowID: meta["workflow_id"].text,
+            workflowName: meta["name"].text, taskID: meta["id"].text.nonEmpty ?? id,
+            createdAt: meta["created_at"].double > 0 ? meta["created_at"].double : (created > 100_000_000_000 ? created / 1000 : created))
+        if submission.count > 4 { record.requestedOutputs = submission[4].array.map(\.text) }
+        var producers: [String: [String]] = [:]
+        var displayed: [String: String] = [:]
+        for (nodeID, result) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {
+            for file in OutputImage.fromNodeOutput(result, promptID: id) {
+                producers[file.assetID, default: []].append(nodeID)
+            }
+            if record.prompt[nodeID]?["class_type"].text == "GoohaiDisplayAny",
+               let payload = result["gh_display"].array.first,
+               ["STRING", "TEXT"].contains(payload["type"].text.uppercased()),
+               case .string(let text) = payload["text"] {
+                displayed[nodeID] = text
+            }
+        }
+        record.outputNodes = producers.isEmpty ? nil : producers
+        record.displayedText = displayed.isEmpty ? nil : displayed
+        return record
     }
-    var parameterFields: [WorkflowField] {
-        workflow.fields.filter { !MobileField.isPrompt($0) && $0.key != "local_prompts" && !["timeline_data", "图片数据", "history_json", "timeline_ui"].contains($0.key) }
+
+    static func embeddedPrompt(_ value: JSONValue) -> MediaProvenance? {
+        guard case .object(let prompt) = value, !prompt.isEmpty,
+              prompt.values.allSatisfy({ node in
+                  guard !node["class_type"].text.isEmpty, case .object = node["inputs"] else { return false }
+                  return true
+              }) else { return nil }
+        return MediaProvenance(prompt: prompt, workflowID: "", workflowName: "", taskID: "", createdAt: 0)
     }
     /// ComfyUI's standard SaveImage writes the executed prompt into a PNG tEXt chunk.
     /// Read it only when task history is unavailable; never infer prompts from the current workflow.
@@ -116,12 +163,8 @@ struct MediaProvenance: Codable, Equatable {
                 let payload = data.subdata(in: offset + 8..<offset + 8 + length)
                 if let separator = payload.firstIndex(of: 0), String(data: payload.prefix(upTo: separator), encoding: .utf8) == "prompt",
                    let value = try? JSONDecoder().decode(JSONValue.self, from: payload.suffix(from: separator + 1)),
-                   case .object(let prompt) = value, !prompt.isEmpty,
-                   prompt.values.allSatisfy({ node in
-                       guard !node["class_type"].text.isEmpty, case .object = node["inputs"] else { return false }
-                       return true
-                   }) {
-                    return MediaProvenance(prompt: prompt, workflowID: "", workflowName: "", taskID: "", createdAt: 0)
+                   let record = embeddedPrompt(value) {
+                    return record
                 }
             }
             offset += length + 12

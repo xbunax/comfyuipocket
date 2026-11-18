@@ -107,7 +107,7 @@ struct CanvasNodeNavigator: View {
                 session.focusedNodeID = node.id; session.nodeFocusActive = true
                 Task { await session.focusSelection() }
             }
-        }.sheet(item: $previewOutput) { output in ImageDetail(output: output) }
+        }.fullScreenCover(item: $previewOutput) { output in ImageDetail(output: output) }
     }
     private var filteredBookmarks: [NodeBookmark] {
         let q = search.trimmingCharacters(in: .whitespacesAndNewlines)

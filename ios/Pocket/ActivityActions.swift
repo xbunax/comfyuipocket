@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum ArtworkDeletion: Equatable {
+    case work, serverFile
+}
+
 enum TaskRemovalTarget: Identifiable {
     case task(GenerationTask), prompt(String)
     var id: String {
@@ -50,27 +54,39 @@ extension PocketStore {
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
-    func removeOutput(_ output: OutputImage, deleteFile: Bool) async -> Bool {
-        guard let api = client else { error = "请先选择服务器。"; return false }
+    func removeOutput(_ output: OutputImage, deleteFile: Bool) async throws -> Bool {
+        guard let api = client else { throw PocketError.message("请先选择服务器。") }
         let server = api.serverID
-        guard !deletingOutputs.contains(output.id) else { return false }
-        deletingOutputs.insert(output.id); defer { deletingOutputs.remove(output.id) }
-        do {
-            if deleteFile {
-                guard pluginCapabilities.contains("media-delete") else {
-                    throw PocketError.message("请更新电脑端 Pocket 插件至 v0.5.0 并重启 ComfyUI，才能删除服务器文件。")
-                }
-                _ = try await api.json("pocket/v1/media/delete", method: "POST", body: .object([
-                    "filename": .string(output.filename), "subfolder": .string(output.subfolder), "type": .string(output.type)
-                ]))
+        guard deletingOutputs.insert(output.assetID).inserted else { return false }
+        defer { deletingOutputs.remove(output.assetID) }
+        if deleteFile {
+            guard pluginCapabilities.contains("media-delete") else {
+                throw PocketError.message("请更新电脑端 Pocket 插件并重启 ComfyUI。")
             }
-            var archive = mediaArchives[server] ?? MediaArchive()
-            archive.remove(output)
-            mediaArchives[server] = archive; try persistMediaArchives()
+            let result = try await api.json("pocket/v1/media/delete", method: "POST", body: .object([
+                "filename": .string(output.filename), "subfolder": .string(output.subfolder), "type": .string(output.type)
+            ]))
+            guard result["deleted"] == .bool(true) else { throw PocketError.message("服务器未确认删除文件。") }
+        }
+        let previous = mediaArchives[server]
+        var archive = previous ?? MediaArchive()
+        archive.remove(output)
+        mediaArchives[server] = archive
+        do { try persistMediaArchives() }
+        catch {
+            if !deleteFile {
+                mediaArchives[server] = previous
+                throw error
+            }
+            if client === api { notice = "服务器文件已删除，本机作品记录保存失败。" }
             await MediaCache.shared.invalidate(resource: api.cacheResource(api.mediaURL(output)))
-            if client === api { notice = deleteFile ? "已删除服务器文件并清理缓存。" : "已从本机作品中移除。" }
+            if output.type == "output", client?.serverID == server { outputDirectoryRevision = UUID() }
             return true
-        } catch { self.error = error.localizedDescription; return false }
+        }
+        await MediaCache.shared.invalidate(resource: api.cacheResource(api.mediaURL(output)))
+        if deleteFile, output.type == "output", client?.serverID == server { outputDirectoryRevision = UUID() }
+        if client === api { notice = deleteFile ? "已删除服务器文件。" : "已从本机作品中移除。" }
+        return true
     }
 }
 
@@ -90,21 +106,43 @@ private struct TaskDeletionDialog: ViewModifier {
 private struct WorkDeletionDialog: ViewModifier {
     @Environment(PocketStore.self) private var store
     @Binding var output: OutputImage?
+    let mode: ArtworkDeletion
     var onDeleted: () -> Void
+    @State private var failure: String?
     func body(content: Content) -> some View {
-        content.confirmationDialog("删除作品？", isPresented: Binding(get: { output != nil }, set: { if !$0 { output = nil } }), presenting: output) { output in
-            Button("仅从本机作品移除", role: .destructive) {
-                Task { if await store.removeOutput(output, deleteFile: false) { onDeleted() } }
-            }
-            if store.pluginCapabilities.contains("media-delete") {
-                Button("永久删除服务器文件", role: .destructive) {
-                    Task { if await store.removeOutput(output, deleteFile: true) { onDeleted() } }
+        content
+            .confirmationDialog(mode == .serverFile ? "永久删除服务器文件？" : "删除作品？",
+                isPresented: Binding(get: { output != nil }, set: { if !$0 { output = nil } }),
+                titleVisibility: .visible, presenting: output) { output in
+                    let server = store.client?.serverID
+                    if mode == .work {
+                        Button("仅从本机作品移除", role: .destructive) { remove(output, for: server, deleteFile: false) }
+                    }
+                    if store.pluginCapabilities.contains("media-delete") {
+                        Button("永久删除服务器文件", role: .destructive) { remove(output, for: server, deleteFile: true) }
+                    }
+                    Button("取消", role: .cancel) { }
+                } message: { output in
+                    let path = [output.type, output.subfolder, output.filename].filter { !$0.isEmpty }.joined(separator: "/")
+                    if mode == .serverFile {
+                        Text("\(path)\n服务器上的文件会永久删除。")
+                    } else {
+                        Text(store.pluginCapabilities.contains("media-delete")
+                             ? "\(path)\n从本机移除只清理作品列表。永久删除会移除电脑文件。"
+                             : "当前可从本机作品中移除。删除电脑文件需更新 Pocket 插件。")
+                    }
                 }
-            }
-        } message: { _ in
-            Text(store.pluginCapabilities.contains("media-delete")
-                 ? "仅移除会保留电脑文件；永久删除会清理电脑上的对应文件，无法恢复。"
-                 : "当前可从本机作品中移除。删除电脑文件需更新 Pocket 插件至 v0.5.0 并重启 ComfyUI。")
+            .onChange(of: store.client?.serverID) { _, _ in output = nil }
+            .alert("文件操作失败", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("确定", role: .cancel) { failure = nil }
+            } message: { Text(failure ?? "") }
+    }
+    private func remove(_ output: OutputImage, for server: String?, deleteFile: Bool) {
+        Task {
+            guard let server, server == store.client?.serverID else { return }
+            do {
+                if try await store.removeOutput(output, deleteFile: deleteFile) { onDeleted() }
+            } catch { failure = error.localizedDescription }
         }
     }
 }
@@ -113,7 +151,8 @@ extension View {
     func taskDeletionDialog(_ target: Binding<TaskRemovalTarget?>, onDeleted: @escaping () -> Void = {}) -> some View {
         modifier(TaskDeletionDialog(target: target, onDeleted: onDeleted))
     }
-    func workDeletionDialog(_ output: Binding<OutputImage?>, onDeleted: @escaping () -> Void = {}) -> some View {
-        modifier(WorkDeletionDialog(output: output, onDeleted: onDeleted))
+    func workDeletionDialog(_ output: Binding<OutputImage?>, mode: ArtworkDeletion = .work,
+                            onDeleted: @escaping () -> Void = {}) -> some View {
+        modifier(WorkDeletionDialog(output: output, mode: mode, onDeleted: onDeleted))
     }
 }

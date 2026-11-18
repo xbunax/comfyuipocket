@@ -386,7 +386,7 @@ struct WorkflowEditor: View {
                                             }
                                         }.padding(.vertical, 4)
                                     }
-                                    .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
+                                    .fullScreenCover(item: $selectedOutput) { ImageDetail(output: $0) }
                                 }
                             }
                         }

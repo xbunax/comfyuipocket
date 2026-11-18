@@ -1,6 +1,4 @@
 import SwiftUI
-import Photos
-import AVKit
 
 private enum TaskNavigationTarget: Hashable {
     case batch(String)
@@ -198,7 +196,7 @@ struct GenerationTaskDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
+        .fullScreenCover(item: $selectedOutput) { ImageDetail(output: $0) }
         .taskDeletionDialog($removing, onDeleted: { dismiss() })
         .refreshable { await store.refresh() }
     }
@@ -231,22 +229,15 @@ struct TaskDetailView: View {
         if let item = store.queueItem(promptID: promptID), item.array.count > 2 { return item.array[2] }
         return snapshot.map(JSONValue.object) ?? .null
     }
-    private var workflow: Workflow? {
-        guard !prompt.object.isEmpty,
-              let data = try? JSONEncoder().encode(JSONValue.object(["prompt": prompt])) else { return nil }
-        return try? Workflow.load(data, name: "任务")
-    }
-    private var promptFields: [WorkflowField] {
-        workflow?.fields.filter { field in
-            let key = field.key.lowercased()
-            return key == "text" || key.contains("prompt")
-        } ?? []
-    }
-    private var parameterFields: [WorkflowField] {
-        workflow?.fields.filter { field in
-            let key = field.key.lowercased()
-            return key != "text" && !key.contains("prompt")
-        } ?? []
+    private var generation: GenerationDetails {
+        if let record = store.currentMediaArchive.provenance?[promptID] {
+            return ExecutionPrompts(record: record).details()
+        }
+        let queued = store.queueItem(promptID: promptID)?.array ?? []
+        let requested = queued.count > 4 ? queued[4].array.map(\.text) : nil
+        let record = MediaProvenance(prompt: prompt.object, workflowID: "", workflowName: "", taskID: promptID,
+                                     createdAt: 0, requestedOutputs: requested)
+        return ExecutionPrompts(record: record).details()
     }
     private var outputs: [OutputImage] {
         store.outputs(forPromptID: promptID)
@@ -276,6 +267,7 @@ struct TaskDetailView: View {
         return "任务记录不可用"
     }
     var body: some View {
+        let generation = generation
         List {
             Section("状态") {
                 LabeledContent("状态", value: statusText)
@@ -308,20 +300,14 @@ struct TaskDetailView: View {
                     }.padding(.vertical, 4)
                 }
             }
-            if !promptFields.isEmpty {
+            if !generation.prompts.isEmpty {
                 Section("提示词") {
-                    ForEach(promptFields) { field in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("\(field.nodeTitle) · \(field.key)")
-                                .font(.caption).foregroundStyle(PocketPalette.secondary)
-                            Text(field.value.text).textSelection(.enabled)
-                        }.padding(.vertical, 4)
-                    }
+                    ForEach(generation.prompts) { GenerationPromptRow(prompt: $0) }
                 }
             }
-            if !parameterFields.isEmpty {
+            if !generation.parameters.isEmpty {
                 Section("使用的参数") {
-                    ForEach(parameterFields) { field in
+                    ForEach(generation.parameters) { field in
                         LabeledContent("\(field.nodeTitle) · \(field.key)", value: field.value.text)
                             .font(.subheadline)
                     }
@@ -342,7 +328,7 @@ struct TaskDetailView: View {
         }
         .pocketListSurface()
         .navigationTitle("任务详情").navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $selectedOutput) { ImageDetail(output: $0) }
+        .fullScreenCover(item: $selectedOutput) { ImageDetail(output: $0) }
         .toolbar {
             if !store.currentGenerationTasks.contains(where: { $0.items.contains(where: { $0.id == promptID }) }) {
                 Button("删除任务", systemImage: "trash", role: .destructive) { removing = .prompt(promptID) }
@@ -355,13 +341,13 @@ struct TaskDetailView: View {
 }
 
 struct GalleryView: View {
+    private enum SectionTab: String {
+        case workflow, files
+    }
     @Environment(PocketStore.self) private var store
-    @Environment(\.workspaceLayout) private var layout
-    @State private var section = "tasks"
-    @State private var selected: OutputImage?
-    @State private var sheetOutput: OutputImage?
-    @State private var sequence: ArtworkSequence?
-    @State private var selectionAllowsDeletion = true
+    @State private var section: SectionTab = .workflow
+    @State private var folder = ""
+    @State private var preview: ArtworkSequence?
     @State private var removing: OutputImage?
     @State private var expanded: Set<String> = []
     @AppStorage("mediaSortKey") private var sortKey = "time"
@@ -376,7 +362,6 @@ struct GalleryView: View {
         return MediaOrdering.groups(archive.galleryGroups, key: order, ascending: ascending, sizes: sizes)
     }
     var body: some View {
-        HStack(spacing: 0) {
         NavigationStack {
             VStack(spacing: 0) {
                 ViewThatFits(in: .horizontal) {
@@ -387,97 +372,130 @@ struct GalleryView: View {
                     }
                 }.padding(.horizontal, 16).padding(.vertical, 6)
                 Divider()
-            ZStack {
-                PocketBackground()
-                if section == "output" {
-                    OutputBrowserView { preview($0, allowDeletion: false) }
-                        .id(store.client?.serverID ?? "")
-                } else if groups.isEmpty {
-                    ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled", description: Text("作品按任务收纳。删除任务记录后，已收集的作品仍会保留。"))
-                } else {
-                    ScrollView {
-                        HStack {
-                            Text("\(groups.count) 个任务 · \(groups.reduce(0) { $0 + $1.outputs.count }) 件作品").font(.subheadline.weight(.medium))
-                            Spacer()
-                            Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
-                        }.padding(.horizontal, 20).padding(.top, 8)
-                        if order == .size {
-                            Text(readingSizes ? "正在读取文件大小…" : "按任务产物合计大小排序；无法读取大小的任务放在末尾。")
-                                .font(.caption).foregroundStyle(PocketPalette.secondary).padding(.horizontal, 20)
-                        }
-                        LazyVStack(spacing: 14) {
-                            ForEach(groups) { group in
-                                GalleryTaskCard(group: group, expanded: Binding(get: { expanded.contains(group.id) }, set: {
-                                    if $0 { expanded.insert(group.id) } else { expanded.remove(group.id) }
-                                }), selected: Binding(get: { selected }, set: { if let output = $0 {
-                                    preview(ArtworkSequence(selected: output, items: MediaOrdering.outputs(group.outputs, key: order, ascending: ascending, sizes: sizes)))
-                                } }), removing: $removing,
-                                    sortKey: order, ascending: ascending, sizes: sizes)
-                            }
-                        }.padding(16)
-                    }.contentMargins(.bottom, 28, for: .scrollContent)
-                        .refreshable { await store.refresh(); sizeRefresh = UUID() }
-                }
-            }
-            }.navigationTitle("作品").navigationBarTitleDisplayMode(.inline)
-                .toolbar(.hidden, for: .navigationBar)
-                .sheet(item: $sheetOutput) { _ in if let sequence { viewer(sequence) } }
-                .workDeletionDialog($removing)
-                .onChange(of: store.client?.serverID) { _, _ in expanded.removeAll(); selected = nil; sheetOutput = nil; sequence = nil; sizes = [:] }
-                .onChange(of: store.images.map(\.id)) { _, ids in
-                    if selectionAllowsDeletion, let sequence {
-                        let liveIDs = Set(store.currentMediaArchive.outputs.map(\.id))
-                        sequence.items.removeAll { !liveIDs.contains($0.id) }
-                        if !liveIDs.contains(sequence.selected.id) { selected = nil; sheetOutput = nil; self.sequence = nil }
+                ZStack {
+                    PocketBackground()
+                    if section == .files {
+                        OutputBrowserView(folder: $folder) { preview = $0 }
+                            .id(store.client?.serverID ?? "")
+                    } else {
+                        workflowOutputs
                     }
                 }
-        }
-        .frame(maxWidth: layout.usesColumns ? min(520, max(300, layout.width * 0.42)) : .infinity)
-        if layout.usesColumns {
-            Divider()
-            if selected != nil, let sequence {
-                viewer(sequence, onClose: { self.selected = nil; self.sequence = nil })
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ContentUnavailableView("选择图片或视频", systemImage: "photo.on.rectangle.angled",
-                    description: Text("在左侧浏览任务作品与历史 Output，在这里缩放图片、播放视频和查看生成信息。"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .simultaneousGesture(GalleryPageSwipe(enabled: preview == nil && (section == .workflow || folder.isEmpty)) { left in
+                    if left && section == .workflow {
+                        folder = ""
+                        section = .files
+                    } else if !left && section == .files && folder.isEmpty {
+                        section = .workflow
+                    }
+                })
             }
+            .navigationTitle("作品").navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
         }
+        .fullScreenCover(item: $preview) { items in
+            ImageDetail(output: items.selected, deletion: items.deletion, sequence: items)
+                .id(items.selected.id)
         }
-        .onChange(of: layout.usesColumns) { _, wide in
-            if wide { sheetOutput = nil }
-            else if let selected { sheetOutput = selected }
+        .workDeletionDialog($removing)
+        .onChange(of: store.client?.serverID) { _, _ in
+            folder = ""; preview = nil; expanded.removeAll(); sizes = [:]
         }
-        .task(id: "\(store.client?.serverID ?? "")|\(section)|\(sortKey)|\(sizeRefresh)|\(store.images.map(\.id).joined(separator: "|"))") {
-            guard section == "tasks", order == .size, let api = store.client else { readingSizes = false; return }
+        .task(id: "\(store.client?.serverID ?? "")|\(section.rawValue)|\(sortKey)|\(sizeRefresh)|\(store.images.map(\.id).joined(separator: "|"))") {
+            guard section == .workflow, order == .size, let api = store.client else { readingSizes = false; return }
             readingSizes = true
             let result = await api.mediaSizes(store.images)
             guard !Task.isCancelled, store.client === api else { return }
             sizes = result; readingSizes = false
         }
     }
+
+    @ViewBuilder private var workflowOutputs: some View {
+        let items = groups
+        if items.isEmpty {
+            ContentUnavailableView("你的作品将在这里出现", systemImage: "photo.on.rectangle.angled",
+                description: Text("这里按生成任务显示工作流输出。"))
+        } else {
+            ScrollView {
+                HStack {
+                    Text("\(items.count) 个任务 · \(items.reduce(0) { $0 + $1.outputs.count }) 件作品")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
+                }.padding(.horizontal, 20).padding(.top, 8)
+                if order == .size {
+                    Text(readingSizes ? "正在读取文件大小…" : "按任务产物合计大小排序")
+                        .font(.caption).foregroundStyle(PocketPalette.secondary).padding(.horizontal, 20)
+                }
+                LazyVStack(spacing: 14) {
+                    ForEach(items) { group in
+                        GalleryTaskCard(group: group, expanded: Binding(get: { expanded.contains(group.id) }, set: {
+                            if $0 { expanded.insert(group.id) } else { expanded.remove(group.id) }
+                        }), onPreview: { file in
+                            let ordered = MediaOrdering.outputs(group.outputs, key: order, ascending: ascending, sizes: sizes)
+                            preview = ArtworkSequence(selected: file, items: ordered)
+                        }, removing: $removing, sortKey: order, ascending: ascending, sizes: sizes)
+                    }
+                }.padding(16)
+            }.contentMargins(.bottom, 28, for: .scrollContent)
+                .refreshable { await store.refresh(); sizeRefresh = UUID() }
+        }
+    }
+
     private var galleryTitle: some View {
         Text("作品").font(.title2.bold()).fixedSize().accessibilityAddTraits(.isHeader)
     }
     @ViewBuilder private var gallerySources: some View {
         Picker("作品来源", selection: $section) {
-            Text("任务作品").tag("tasks"); Text("Output").tag("output")
-        }.pickerStyle(.segmented).frame(maxWidth: 190)
-        if section == "tasks" {
+            Text("工作流输出").tag(SectionTab.workflow)
+            Text("文件预览").tag(SectionTab.files)
+        }.pickerStyle(.segmented).frame(maxWidth: 250).accessibilityIdentifier("gallery.source")
+        if section == .workflow {
             Menu {
                 MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
                 Button("刷新", systemImage: "arrow.clockwise") { Task { await store.refresh(); sizeRefresh = UUID() } }.disabled(!store.connected)
             } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 44, minHeight: 44) }
         }
     }
-    private func preview(_ items: ArtworkSequence, allowDeletion: Bool = true) {
-        sequence = items; selectionAllowsDeletion = allowDeletion; selected = items.selected
-        if !layout.usesColumns { sheetOutput = items.selected }
+}
+
+private struct GalleryPageSwipe: UIGestureRecognizerRepresentable {
+    let enabled: Bool
+    let changePage: (Bool) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.maximumNumberOfTouches = 1
+        pan.isEnabled = enabled
+        pan.delegate = context.coordinator
+        return pan
     }
-    private func viewer(_ items: ArtworkSequence, onClose: (() -> Void)? = nil) -> some View {
-        ImageDetail(output: items.selected, allowDeletion: selectionAllowsDeletion, onClose: onClose, sequence: items)
-            .id(items.selected.id)
+
+    func updateUIGestureRecognizer(_ pan: UIPanGestureRecognizer, context: Context) { pan.isEnabled = enabled }
+
+    func handleUIGestureRecognizerAction(_ pan: UIPanGestureRecognizer, context: Context) {
+        guard enabled, pan.state == .ended else { return }
+        let movement = pan.translation(in: pan.view)
+        let velocity = pan.velocity(in: pan.view)
+        guard abs(movement.x) > abs(movement.y) * 1.35,
+              abs(movement.x) >= 64 || (abs(movement.x) >= 28 && abs(velocity.x) >= 550 && movement.x * velocity.x > 0)
+        else { return }
+        changePage(movement.x < 0)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let speed = pan.velocity(in: pan.view)
+            return abs(speed.x) > abs(speed.y) * 1.35
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     }
 }
 
@@ -485,7 +503,7 @@ private struct GalleryTaskCard: View {
     @Environment(PocketStore.self) private var store
     let group: MediaTaskGroup
     @Binding var expanded: Bool
-    @Binding var selected: OutputImage?
+    let onPreview: (OutputImage) -> Void
     @Binding var removing: OutputImage?
     var sortKey: MediaSortKey = .time
     var ascending = false
@@ -521,14 +539,14 @@ private struct GalleryTaskCard: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
                     ForEach(orderedOutputs) { image in
                         VStack(alignment: .leading, spacing: 8) {
-                            Button { selected = image } label: {
+                            Button { onPreview(image) } label: {
                                 RemoteImage(output: image).frame(height: 150).clipped().clipShape(.rect(cornerRadius: 12))
                             }.buttonStyle(.plain)
                             HStack {
                                 Text(image.filename).font(.caption2).lineLimit(1).foregroundStyle(PocketPalette.secondary)
                                 Spacer(minLength: 0)
                                 Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
-                                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.id))
+                                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.assetID))
                             }
                         }.contextMenu { Button("删除作品", systemImage: "trash", role: .destructive) { removing = image } }
                     }
@@ -539,15 +557,18 @@ private struct GalleryTaskCard: View {
     }
 }
 
-@MainActor @Observable final class ArtworkSequence {
+@MainActor @Observable final class ArtworkSequence: Identifiable {
+    let id = UUID()
+    let deletion: ArtworkDeletion
     var selected: OutputImage
     var items: [OutputImage]
     private(set) var next: Int?
     private(set) var loading = false
     private(set) var error: String?
     private let page: ((Int) async throws -> OutputDirectoryPage)?
-    init(selected: OutputImage, items: [OutputImage], next: Int? = nil, page: ((Int) async throws -> OutputDirectoryPage)? = nil) {
-        self.selected = selected; self.items = items; self.next = next; self.page = page
+    init(selected: OutputImage, items: [OutputImage], deletion: ArtworkDeletion = .work,
+         next: Int? = nil, page: ((Int) async throws -> OutputDirectoryPage)? = nil) {
+        self.selected = selected; self.items = items; self.deletion = deletion; self.next = next; self.page = page
     }
     func loadMore() async {
         guard !loading, let next, let page else { return }
@@ -565,8 +586,9 @@ private struct GalleryTaskCard: View {
     }
 }
 
-private struct ArtworkFilmstrip: View {
+struct ArtworkFilmstrip: View {
     let sequence: ArtworkSequence
+    let onScrollChanged: (Bool) -> Void
     var body: some View {
         VStack(spacing: 2) {
             ScrollViewReader { proxy in
@@ -588,6 +610,7 @@ private struct ArtworkFilmstrip: View {
                         }
                     }.padding(.horizontal, 14)
                 }.frame(height: 50)
+                    .onScrollPhaseChange { _, phase in onScrollChanged(phase != .idle) }
                     .onAppear { proxy.scrollTo(sequence.selected.id, anchor: .center) }
             }
             if let error = sequence.error { Text(error).font(.caption2).lineLimit(2) }
@@ -629,106 +652,4 @@ struct RemoteImage: View {
 
         }.onDisappear { image = nil }
     }
-}
-
-struct ImageDetail: View {
-    @Environment(PocketStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    let output: OutputImage
-    var allowDeletion = true
-    var knownRecord: MediaProvenance? = nil
-    var onClose: (() -> Void)? = nil
-    var sequence: ArtworkSequence? = nil
-    @State private var image: UIImage?
-    @State private var shareURL: URL?
-    @State private var status = ""
-    @State private var player: AVPlayer?
-    @State private var removing: OutputImage?
-    @State private var showDetails = false
-    @State private var fileInfo = ArtworkFileInfo()
-    @State private var record: MediaProvenance?
-    var body: some View {
-        NavigationStack {
-            VStack {
-                ZStack {
-                    Color(white: 0.06)
-                    if let player { VideoPlayer(player: player) }
-                    else if let image { ZoomableArtwork(image: image) }
-                    else if status.isEmpty { ProgressView().tint(.white) }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let sequence, sequence.items.count > 1 || sequence.next != nil {
-                    ArtworkFilmstrip(sequence: sequence)
-                }
-                HStack(spacing: 12) {
-                    if let sequence, let index = sequence.items.firstIndex(where: { $0.id == output.id }) {
-                        Text("\(index + 1) / \(sequence.items.count)\(sequence.next == nil ? "" : "+")")
-                            .font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary)
-                    }
-                    if let resolution = fileInfo.resolution { Text(resolution).font(.caption.monospacedDigit()).foregroundStyle(PocketPalette.secondary) }
-                    if !output.isVideo { Text("双指缩放 · 双击放大").font(.caption2).foregroundStyle(PocketPalette.secondary) }
-                    Spacer()
-                    Button("详情", systemImage: "info.circle") { showDetails = true }.font(.subheadline)
-                }.padding(.horizontal, 16)
-                HStack {
-                    Button("保存到照片", systemImage: "square.and.arrow.down") {
-                        Task {
-                            let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-                            guard auth == .authorized || auth == .limited else { status = "请在系统设置中允许保存照片。"; return }
-                            do {
-                                if output.isVideo, let shareURL {
-                                    try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: shareURL) }
-                                } else if let image {
-                                    try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
-                                }
-                                status = "已保存到照片。"
-                            } catch { status = error.localizedDescription }
-                        }
-                    }.buttonStyle(.glassProminent).disabled(shareURL == nil)
-                    if let shareURL { ShareLink(item: shareURL) { Label("分享", systemImage: "square.and.arrow.up") }.buttonStyle(.glass) }
-                }.padding()
-                if !status.isEmpty { Text(status).font(.caption).padding() }
-            }.navigationTitle(output.filename).navigationBarTitleDisplayMode(.inline)
-                .edgeSwipeBack { close() }
-                .toolbar {
-                    if allowDeletion {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("删除作品", systemImage: "trash", role: .destructive) { removing = output }
-                                .disabled(store.deletingOutputs.contains(output.id))
-                        }
-                    }
-                    ToolbarItem(placement: .confirmationAction) { Button("完成") { close() } }
-                }
-                .sheet(isPresented: $showDetails) { ArtworkDetails(output: output, file: fileInfo, record: record) }
-                .workDeletionDialog($removing, onDeleted: { close() })
-                .task {
-                    do {
-                        guard let api = store.client else { return }
-                        var archive = store.currentMediaArchive
-                        archive.rememberTasks(store.currentGenerationTasks)
-                        record = knownRecord ?? archive.provenance?[output.promptID]
-                        if record == nil, let original = archive.outputs.first(where: { $0.assetID == output.assetID }) {
-                            record = archive.provenance?[original.promptID]
-                        }
-                        let file = try await api.download(output)
-                        guard !Task.isCancelled else { try? FileManager.default.removeItem(at: file); return }
-                        shareURL = file
-                        fileInfo = await ArtworkFileInfo.read(file, video: output.isVideo)
-                        guard !Task.isCancelled else { return }
-                        if record == nil, !output.isVideo, let data = try? Data(contentsOf: file) {
-                            record = MediaProvenance.embeddedPNG(data)
-                        }
-                        if output.isVideo {
-                            player = AVPlayer(url: file)
-                            if URL(fileURLWithPath: output.filename).pathExtension.lowercased() == "webm" { status = "系统可能无法播放 WebM，可使用分享在其他应用中打开。" }
-                        } else {
-                            image = UIImage(contentsOfFile: file.path)
-                            if image == nil { status = "无法解码图片，可通过分享在其他应用中打开。" }
-                        }
-                    } catch { status = error.localizedDescription }
-                }
-                .onDisappear { player?.pause(); if let shareURL { try? FileManager.default.removeItem(at: shareURL) } }
-        }
-        .workspaceLayoutReader()
-    }
-    private func close() { if let onClose { onClose() } else { dismiss() } }
 }

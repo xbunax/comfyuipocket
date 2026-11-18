@@ -328,18 +328,20 @@ struct OutputImage: Codable, Equatable, Identifiable, Sendable {
         }
     }
     static func fromHistoryEntry(_ entry: JSONValue, promptID: String) -> [OutputImage] {
-        var result: [OutputImage] = []
         var seen = Set<String>()
-        for (_, output) in entry["outputs"].object.sorted(by: { $0.key < $1.key }) {
-            let files = output["images"].array + output["gifs"].array + output["videos"].array
-            for file in files {
-                guard !file["filename"].text.isEmpty else { continue }
-                let item = OutputImage(promptID: promptID, filename: file["filename"].text, subfolder: file["subfolder"].text,
-                                       type: file["type"].text.nonEmpty ?? "output")
-                if seen.insert(item.id).inserted { result.append(item) }
-            }
+        return entry["outputs"].object.sorted { $0.key < $1.key }.flatMap {
+            fromNodeOutput($0.value, promptID: promptID)
+        }.filter { seen.insert($0.id).inserted }
+    }
+    static func fromNodeOutput(_ output: JSONValue, promptID: String) -> [OutputImage] {
+        let files = output["images"].array + output["gifs"].array + output["videos"].array
+        var seen = Set<String>()
+        return files.compactMap { file in
+            guard let name = file["filename"].text.nonEmpty else { return nil }
+            let item = OutputImage(promptID: promptID, filename: name, subfolder: file["subfolder"].text,
+                                   type: file["type"].text.nonEmpty ?? "output")
+            return seen.insert(item.id).inserted ? item : nil
         }
-        return result
     }
     static func fromHistory(_ history: JSONValue) -> [OutputImage] {
         let entries = history.object.sorted { ($0.value["prompt"].array.first?.double ?? 0) > ($1.value["prompt"].array.first?.double ?? 0) }

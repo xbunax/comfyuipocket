@@ -50,6 +50,7 @@ final class PocketStore {
     var pluginCapabilities: Set<String> = []
     var deletingTasks: Set<String> = []
     var deletingOutputs: Set<String> = []
+    var outputDirectoryRevision = UUID()
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var polling: Task<Void, Never>?
     @ObservationIgnored private var syncLoop: Task<Void, Never>?

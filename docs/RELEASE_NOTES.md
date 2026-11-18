@@ -1,6 +1,6 @@
-ComfyUI Pocket v0.15.0
+ComfyUI Pocket v0.15.1
 
-- Test the active paired iroh connection from the Connection tab. The app reports median round-trip latency, download Mbps and acknowledged upload Mbps. A manual test sends 2 MiB each way. Plugin 0.10.0 adds the authenticated diagnostic stream. Existing pairings and older clients remain compatible.
-- See actual connection stages, inspect the current session log and retry during backoff.
-- Settings → Appearance → Workflow Canvas adds optional tap-to-focus in overview. It starts off. A tap on a node title or body focuses the original node and updates navigation; editing, links, drags and two-finger gestures keep their native behavior.
-- Resume a workflow from the workbench, see batch progress, and browse Output with a thumbnail filmstrip. The compact canvas adds a live minimap and a single-line hardware summary. On wide windows the inspector shows bookmarked nodes, available sampling controls and the latest output.
+- Open images and videos in a full-screen viewer in portrait and landscape. Controls hide after four seconds of inactivity and return with a tap.
+- Trace the generation graph that produced each file to find its prompts. Follow the selected conditional branch, and show recorded rewritten text when available.
+- Swipe between the Workflow Outputs and File Preview home pages. In nested folders, swipe from the left edge to go back.
+- Permanently delete a server image or video from its context menu or preview. The confirmation shows the file path, and both views refresh after deletion.

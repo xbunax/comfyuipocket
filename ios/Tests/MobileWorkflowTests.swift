@@ -7,7 +7,7 @@ import XCTest
 
 final class MobileWorkflowTests: XCTestCase {
     func testArtworkDetailsKeepSubmittedPromptAfterHistoryAndTaskRemoval() throws {
-        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p":{"prompt":[1,"p",{"3":{"class_type":"LazyMergeWorkbench","inputs":{"提示词文本":"original prompt"}},"4":{"class_type":"Size","inputs":{"width":1024,"height":768,"seed":18446744073709551615}}},{"pocket_task":{"id":"batch","name":"K2 Workbench","workflow_id":"workflow-a","created_at":1700000000}}],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))
+        let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p":{"prompt":[1,"p",{"1":{"class_type":"SaveImage","inputs":{"images":["2",0]}},"2":{"class_type":"LazyMergeGenerate","inputs":{"工作台包":["3",0],"resolution":["4",0]}},"3":{"class_type":"LazyMergeWorkbench","inputs":{"提示词文本":"original prompt"}},"4":{"class_type":"Size","inputs":{"width":1024,"height":768,"seed":18446744073709551615}}},{"pocket_task":{"id":"batch","name":"K2 Workbench","workflow_id":"workflow-a","created_at":1700000000}}],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))
         var archive = MediaArchive(); archive.ingest(history)
         archive.deletedTaskIDs.insert("batch"); archive.deletedPromptIDs.insert("p")
         archive.ingest(.object([:]))
@@ -15,7 +15,7 @@ final class MobileWorkflowTests: XCTestCase {
         let record = try XCTUnwrap(saved.provenance?["p"])
         XCTAssertEqual(record.workflowID, "workflow-a")
         XCTAssertEqual(record.workflowName, "K2 Workbench")
-        XCTAssertEqual(record.promptFields.first?.value, .string("original prompt"))
+        XCTAssertEqual(ExecutionPrompts(record: record).details(for: saved.gallery.first).prompts.first?.text, "original prompt")
         XCTAssertEqual(record.prompt["4"]?["inputs"]["seed"], .unsigned(UInt64.max))
         XCTAssertEqual(saved.galleryGroups.first?.outputs.count, 1)
     }
@@ -26,10 +26,81 @@ final class MobileWorkflowTests: XCTestCase {
         var data = Data([137, 80, 78, 71, 13, 10, 26, 10, UInt8((n >> 24) & 255), UInt8((n >> 16) & 255), UInt8((n >> 8) & 255), UInt8(n & 255)])
         data.append(Data("tEXt".utf8)); data.append(payload); data.append(Data(repeating: 0, count: 4))
         let record = try XCTUnwrap(MediaProvenance.embeddedPNG(data))
-        XCTAssertEqual(record.promptFields.first?.value, .string("saved image prompt"))
+        XCTAssertEqual(ExecutionPrompts(record: record).details().prompts.first?.text, "saved image prompt")
         XCTAssertTrue(record.workflowName.isEmpty)
         XCTAssertNil(MediaProvenance.embeddedPNG(Data(data.dropLast(5))))
         XCTAssertNil(MediaProvenance.embeddedPNG(Data("not a PNG".utf8)))
+    }
+    func testPreviewFollowsOnlyTheOutputThatWroteTheFile() throws {
+        let entry = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"prompt":[1,"p",{
+          "1":{"class_type":"SaveImage","inputs":{"images":["2",0],"filename_prefix":"first"}},
+          "2":{"class_type":"KSampler","inputs":{"positive":["24:3",0],"negative":["4",0],"steps":20}},
+          "24:3":{"class_type":"CLIPTextEncode","inputs":{"text":["5",0]}},
+          "4":{"class_type":"CLIPTextEncode","inputs":{"text":"negative details"}},
+          "5":{"class_type":"Text","inputs":{"text":"actual positive"}},
+          "6":{"class_type":"MarkdownNote","inputs":{"text":"instructions only"}},
+          "7":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"second"}},
+          "8":{"class_type":"CustomGenerate","inputs":{"prompt":"other output"}},
+          "9":{"class_type":"BilingualPromptChat","inputs":{"prompt":"unused text","system_prompt":"fixed instructions"}}
+        },{},["1","7"]],"outputs":{"1":{"images":[{"filename":"first_00001_.png"}]},"7":{"images":[{"filename":"second_00001_.png"}]}}}
+        """#.utf8))
+        let record = try XCTUnwrap(MediaProvenance.historyEntry(entry, id: "p"))
+        let output = OutputImage(promptID: "p", filename: "first_00001_.png", subfolder: "", type: "output")
+        let result = ExecutionPrompts(record: record).details(for: output)
+        XCTAssertEqual(Set(result.prompts.map(\.text)), ["actual positive", "negative details"])
+        XCTAssertEqual(result.prompts.first { $0.text == "actual positive" }?.role, .positive)
+        XCTAssertEqual(result.prompts.first { $0.text == "negative details" }?.role, .negative)
+        XCTAssertEqual(result.parameters.first { $0.key == "steps" }?.value, .integer(20))
+
+        let embedded = try XCTUnwrap(MediaProvenance.embeddedPrompt(.object(record.prompt)))
+        let embeddedDetails = ExecutionPrompts(record: embedded).details(for: output)
+        XCTAssertEqual(Set(embeddedDetails.prompts.map(\.text)), ["actual positive", "negative details"])
+    }
+
+    func testPreviewUsesCapturedOptimizedTextAndHonorsSwitch() throws {
+        let entry = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"prompt":[1,"p",{
+          "1":{"class_type":"SaveImage","inputs":{"images":["2",0]}},
+          "2":{"class_type":"CFGGuider","inputs":{"positive":["3",0],"negative":["3",1]}},
+          "3":{"class_type":"TextEncodeQwenImage21","inputs":{"prompt":["4",0],"negative_prompt":"avoid artifacts"}},
+          "4":{"class_type":"ComfySwitchNode","inputs":{"switch":true,"on_true":["5",0],"on_false":["6",0]}},
+          "5":{"class_type":"QwenImagePromptOptimizer","inputs":{"用户提示词":"submitted brief","system_prompt":"fixed optimizer instructions"}},
+          "6":{"class_type":"PrimitiveStringMultiline","inputs":{"value":"other branch"}},
+          "7":{"class_type":"GoohaiDisplayAny","inputs":{"Any":["4",0]}}
+        },{},["1","7"]],"outputs":{
+          "1":{"images":[{"filename":"x.png"}]},
+          "7":{"gh_display":[{"type":"STRING","text":"expanded prompt"}]}
+        }}
+        """#.utf8))
+        var record = try XCTUnwrap(MediaProvenance.historyEntry(entry, id: "p"))
+        let output = OutputImage(promptID: "p", filename: "x.png", subfolder: "", type: "output")
+        func prompts() -> [GenerationPrompt] { ExecutionPrompts(record: record).details(for: output).prompts }
+        XCTAssertEqual(Set(prompts().map(\.text)), ["expanded prompt", "avoid artifacts"])
+        XCTAssertEqual(prompts().first { $0.text == "expanded prompt" }?.submittedInput, false)
+        record.displayedText = nil
+        XCTAssertEqual(Set(prompts().map(\.text)), ["submitted brief", "avoid artifacts"])
+        XCTAssertEqual(prompts().first { $0.text == "submitted brief" }?.submittedInput, true)
+        record.prompt["4"] = .object(["class_type": .string("ComfySwitchNode"), "inputs": .object([
+            "switch": .bool(false), "on_true": .array([.string("5"), .integer(0)]),
+            "on_false": .array([.string("6"), .integer(0)])
+        ])])
+        XCTAssertEqual(Set(prompts().map(\.text)), ["other branch", "avoid artifacts"])
+    }
+
+    func testFileMetadataWinsWhenTheSameOutputPathWasReused() throws {
+        func record(_ text: String) throws -> MediaProvenance {
+            try XCTUnwrap(MediaProvenance.embeddedPrompt(.object([
+                "3": .object(["class_type": .string("CLIPTextEncode"), "inputs": .object(["text": .string(text)])])
+            ])))
+        }
+        let old = OutputImage(promptID: "old", filename: "cover.png", subfolder: "", type: "output")
+        let file = OutputImage(promptID: "file", filename: "cover.png", subfolder: "", type: "output")
+        let oldGraph = try record("prior render")
+        let embedded = try record("current render")
+        let archive = MediaArchive(outputs: [old], provenance: ["old": oldGraph])
+        XCTAssertEqual(archive.record(for: file, embedded: embedded), embedded)
+        XCTAssertEqual(archive.record(for: file, embedded: nil), oldGraph)
     }
     func testGalleryGroupsBatchImagesAndVideosAndSurvivesTaskDeletion() throws {
         var archive = MediaArchive()
