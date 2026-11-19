@@ -1,4 +1,4 @@
-ComfyUI Pocket v0.17.6
+ComfyUI Pocket v0.17.7
 
-- Redraw the green-and-cream app icon as SVG, with a transparent area around the artwork.
-- Use the vector icon in the README and the rendered icon in the iPhone and iPad asset catalog.
+- Default to one submission when opening the canvas batch settings.
+- Remove the app icon outline and fill the iOS icon canvas so the system can apply its own rounded mask.

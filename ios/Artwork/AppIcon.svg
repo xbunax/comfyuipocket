@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
   <title id="title">Comfy Pocket</title>
   <defs>
+    <!-- For the iOS asset, render the tile bounds without this corner radius. iOS applies its own mask. -->
     <clipPath id="tile">
       <rect x="58" y="47" width="908" height="918" rx="184"/>
     </clipPath>
@@ -75,7 +76,6 @@
     <path fill="url(#cream)" fill-opacity=".72" d="M385 965C436 925 484 910 544 888C631 915 697 928 766 931C849 935 909 917 966 877V965Z"/>
     <rect x="58" y="47" width="908" height="918" fill="url(#top-light)"/>
   </g>
-  <rect x="59" y="48" width="906" height="916" rx="183" fill="none" stroke="#fffdf2" stroke-opacity=".44" stroke-width="2"/>
 
   <g fill="url(#under-glass)">
     <ellipse cx="335" cy="482" rx="174" ry="72"/>

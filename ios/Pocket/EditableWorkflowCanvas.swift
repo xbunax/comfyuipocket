@@ -47,7 +47,7 @@ struct WorkflowCanvasView: View {
     @State private var latestPromptID: String?
     @State private var latestTaskID: String?
     @State private var showBatch = false
-    @State private var batchCount = 2
+    @State private var batchCount = 1
     @State private var randomizeBatchSeeds = false
     @State private var showMismatch = false
     @State private var showNodes = false
