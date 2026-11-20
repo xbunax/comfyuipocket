@@ -98,7 +98,7 @@ struct WorkflowCanvasView: View {
                         store.canvasEditingID = workflowID
                         store.canvasEditingSession = session
                         store.canvasSessions.attach(session)
-                        session.open(workflow: workflow, baseURL: api.baseURL)
+                        session.open(workflow: workflow, api: api)
                         await session.applyAppearance()
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
@@ -127,14 +127,14 @@ struct WorkflowCanvasView: View {
                         HStack {
                             Button("查看差异") { showMismatch = true }
                             Spacer()
-                            Button("重新载入") { if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL, force: true) } }
+                            Button("重新载入") { if let workflow, let api = store.client { session.open(workflow: workflow, api: api, force: true) } }
                         }.font(.caption).buttonStyle(.borderless)
                     }.padding(12).background(PocketPalette.surface)
                 }
                 }
             }
             .alert("画布操作失败", isPresented: Binding(get: { session.error != nil }, set: { if !$0 { session.error = nil } })) {
-                Button("重试加载") { if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL, force: true) } }
+                Button("重试加载") { if let workflow, let api = store.client { session.open(workflow: workflow, api: api, force: true) } }
                 Button("关闭", role: .cancel) { session.error = nil }
             } message: { Text(session.error ?? "") }
             .sheet(isPresented: $showMismatch) {
@@ -423,7 +423,7 @@ struct WorkflowCanvasView: View {
                         }
                         Divider()
                         Button("重新加载画布", systemImage: "arrow.clockwise") {
-                            if let workflow, let api = store.client { session.open(workflow: workflow, baseURL: api.baseURL, force: true) }
+                            if let workflow, let api = store.client { session.open(workflow: workflow, api: api, force: true) }
                         }
                     } label: { Image(systemName: "slider.horizontal.3").frame(width: 44, height: 44) }
                         .accessibilityLabel("画布工具").disabled(!session.loaded || submitting)
@@ -624,6 +624,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     @ObservationIgnored var webView: WKWebView?
     @ObservationIgnored var cacheKey: CanvasCacheKey?
     @ObservationIgnored private var baseURL: URL?
+    @ObservationIgnored private weak var api: ComfyClient?
     @ObservationIgnored private var initialText = ""
     @ObservationIgnored private var runtimeReady = false
     @ObservationIgnored private var revision: CanvasRevision?
@@ -634,9 +635,14 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         if let webView { return webView }
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        config.applicationNameForUserAgent = "ComfyUIPocketCanvas"
         config.allowsInlineMediaPlayback = true
-        config.userContentController.add(CanvasMessageHandler(session: self), name: "pocketCanvas")
-        config.userContentController.addUserScript(WKUserScript(source: "window.__POCKET_CANVAS__ = true; try { localStorage.setItem('comfyui-pocket.auto.v1', 'off'); } catch {}", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let handler = CanvasMessageHandler(session: self)
+        config.userContentController.add(handler, name: "pocketCanvas")
+        config.userContentController.addScriptMessageHandler(handler, contentWorld: .page, name: "pocketNodeDefinitions")
+        if let file = Bundle.main.url(forResource: "CanvasBootstrap", withExtension: "js"), let source = try? String(contentsOf: file, encoding: .utf8) {
+            config.userContentController.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         if let file = Bundle.main.url(forResource: "CanvasBridge", withExtension: "js"), let source = try? String(contentsOf: file, encoding: .utf8) {
             config.userContentController.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         } else { error = "画布组件缺失，请重新安装应用。" }
@@ -651,7 +657,9 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         self.webView = web
         return web
     }
-    func open(workflow: Workflow, baseURL: URL, force: Bool = false) {
+    func open(workflow: Workflow, api: ComfyClient, force: Bool = false) {
+        self.api = api
+        let baseURL = api.baseURL
         let incoming = CanvasRevision(workflow)
         if !force, self.baseURL == baseURL, pendingRevision == incoming, loading, webView != nil, error == nil { return }
         let plan = CanvasOpenPlan.resolve(sameServer: self.baseURL == baseURL, runtimeReady: runtimeReady,
@@ -679,6 +687,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     func discard() {
         webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketCanvas")
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketNodeDefinitions", contentWorld: .page)
         webView = nil; runtimeReady = false; available = false; loaded = false; loading = true; textEditing = false
         revision = nil; pendingRevision = nil; viewportSize = .zero
     }
@@ -805,6 +814,12 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard let url, let baseURL else { return false }
         return url.scheme == baseURL.scheme && url.host == baseURL.host && url.port == baseURL.port
     }
+    func nodeDefinitions(for message: WKScriptMessage) async -> String? {
+        guard message.webView === webView, message.frameInfo.isMainFrame,
+              trusted(message.frameInfo.request.url), let api else { return nil }
+        guard let data = try? await api.nodeDefinitions(), self.api === api else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame, trusted(message.frameInfo.request.url), let body = message.body as? [String: Any] else { return }
         switch body["type"] as? String {
@@ -869,10 +884,17 @@ private struct CanvasWebView: UIViewRepresentable {
 
 /// WebKit retains script handlers. Use a weak target so evicting a cached canvas
 /// actually releases its page, sockets and editor instead of creating a cycle.
-@MainActor private final class CanvasMessageHandler: NSObject, WKScriptMessageHandler {
+@MainActor private final class CanvasMessageHandler: NSObject, WKScriptMessageHandler, WKScriptMessageHandlerWithReply {
     weak var session: CanvasSession?
     init(session: CanvasSession) { self.session = session }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         session?.userContentController(userContentController, didReceive: message)
+    }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        Task {
+            if let text = await session?.nodeDefinitions(for: message) { replyHandler(text, nil) }
+            else { replyHandler(NSNull(), nil) }
+        }
     }
 }

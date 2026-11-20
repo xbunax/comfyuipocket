@@ -487,19 +487,39 @@
     const bitmap = document.createElement("canvas"), label = document.createElement("span");
     bitmap.width = 176; bitmap.height = 84; map.append(bitmap, label); document.body.append(map);
     const ctx = bitmap.getContext("2d");
+    const background = document.createElement("canvas");
+    background.width = bitmap.width; background.height = bitmap.height;
+    const backgroundContext = background.getContext("2d");
+    let geometry = [], left, top, k, x, y;
     let scheduled = false;
+    function refreshBackground(nodes) {
+      if (geometry.length === nodes.length && nodes.every((node, index) => {
+        const [px, py, width, height] = geometry[index];
+        return node.pos[0] === px && node.pos[1] === py && node.size[0] === width && node.size[1] === height;
+      })) return;
+      geometry = nodes.map(node => [node.pos[0], node.pos[1], node.size[0], node.size[1]]);
+      left = Infinity; top = Infinity;
+      let right = -Infinity, bottom = -Infinity;
+      for (const [px, py, width, height] of geometry) {
+        left = Math.min(left, px); top = Math.min(top, py - 32);
+        right = Math.max(right, px + width); bottom = Math.max(bottom, py + height);
+      }
+      k = Math.min(168 / Math.max(1, right-left), 76 / Math.max(1, bottom-top));
+      x = (176 - (right-left)*k)/2; y = (84 - (bottom-top)*k)/2;
+      backgroundContext.clearRect(0, 0, 176, 84);
+      backgroundContext.fillStyle = "#b8b6c4";
+      for (const [px, py, width, height] of geometry) {
+        backgroundContext.fillRect(x+(px-left)*k, y+(py-32-top)*k, Math.max(2,width*k), Math.max(2,(height+32)*k));
+      }
+    }
     function draw() {
       scheduled = false;
       const c = app.canvas, nodes = c.graph?._nodes ?? [];
       map.hidden = !loaded || ownedGraphID !== app.rootGraph.id || !nodes.length || textEditor?.busy || document.hidden;
-      if (map.hidden || !ctx) return;
-      const left = Math.min(...nodes.map(n => n.pos[0])), top = Math.min(...nodes.map(n => n.pos[1] - 32));
-      const right = Math.max(...nodes.map(n => n.pos[0] + n.size[0])), bottom = Math.max(...nodes.map(n => n.pos[1] + n.size[1]));
-      const k = Math.min(168 / Math.max(1, right-left), 76 / Math.max(1, bottom-top));
-      const x = (176 - (right-left)*k)/2, y = (84 - (bottom-top)*k)/2;
+      if (map.hidden || !ctx || !backgroundContext) return;
+      refreshBackground(nodes);
       ctx.clearRect(0, 0, 176, 84);
-      ctx.fillStyle = "#b8b6c4";
-      for (const n of nodes) ctx.fillRect(x+(n.pos[0]-left)*k, y+(n.pos[1]-32-top)*k, Math.max(2,n.size[0]*k), Math.max(2,(n.size[1]+32)*k));
+      ctx.drawImage(background, 0, 0);
       const rect = c.canvas.getBoundingClientRect(), scale = c.ds.scale;
       const x0 = Math.max(1,x+(-c.ds.offset[0]-left)*k), y0 = Math.max(1,y+(-c.ds.offset[1]-top)*k);
       const x1 = Math.min(175,x+(-c.ds.offset[0]+rect.width/scale-left)*k), y1 = Math.min(83,y+(-c.ds.offset[1]+rect.height/scale-top)*k);

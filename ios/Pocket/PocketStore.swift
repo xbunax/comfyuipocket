@@ -266,15 +266,17 @@ final class PocketStore {
             client = next; connected = true; save()
             if suspended { irohTransport?.suspendMonitoring() }
             startEvents(next)
+            async let definitionData = next.nodeDefinitions()
             await refresh()
+            await refreshPluginInfo(next, initial: true)
             guard client === next, !restoringConnection else { return }
             do {
-                let definitions = try await next.json("object_info")
+                let data = try await definitionData
+                let definitions = try await Task.detached { try JSONDecoder().decode(JSONValue.self, from: data) }.value
                 if client === next { nodeInfo = definitions }
             } catch {
                 if client === next, !restoringConnection { notice = "节点元信息暂不可用，仍可编辑已有参数。" }
             }
-            await refreshPluginInfo(next, initial: true)
             guard client === next, !restoringConnection else { return }
             if pluginAvailable {
                 await syncNow()

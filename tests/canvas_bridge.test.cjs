@@ -5,6 +5,37 @@ const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
 const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
 const { assetInputWidget, dropReferenceAsset } = require('../ios/Pocket/CanvasBridge.js');
 
+test('canvas bootstrap shares node definitions and preserves ordinary authenticated fetches', async () => {
+  const vm = require('node:vm'), fs = require('node:fs');
+  const baseURI = 'http://localhost:8188/';
+  const route = baseURI + 'api/object_info';
+  let fallback = 0, bridged = 0, fail = false;
+  const window = {
+    fetch: async () => { fallback++; return Response.json({ server: true }); },
+    webkit: { messageHandlers: { pocketNodeDefinitions: { async postMessage() {
+      bridged++;
+      if (fail) throw Error('bridge unavailable');
+      return '{"LoadImage":{"name":"LoadImage"}}';
+    } } } },
+  };
+  const document = { baseURI, cookie: '' };
+  vm.runInNewContext(fs.readFileSync('ios/Pocket/CanvasBootstrap.js', 'utf8'), {
+    window, document, location: new URL(baseURI), URL, Request, Response,
+  });
+  assert.deepEqual(await (await window.fetch(route, { cache: 'no-store' })).json(), { LoadImage: { name: 'LoadImage' } });
+  const original = { server: true };
+  assert.deepEqual(await (await window.fetch(route, { headers: { 'Comfy-User': 'second' } })).json(), original);
+  assert.deepEqual(await (await window.fetch(baseURI + 'api/extensions')).json(), original);
+  assert.deepEqual(await (await window.fetch('http://elsewhere/object_info')).json(), original);
+  document.cookie = 'session=example';
+  assert.deepEqual(await (await window.fetch(route)).json(), original);
+  document.cookie = '';
+  fail = true;
+  assert.deepEqual(await (await window.fetch(route)).json(), original);
+  assert.equal(bridged, 2);
+  assert.equal(fallback, 5);
+});
+
 test('asset drag updates only an unlinked file widget and exposes the imported file in its dropdown', async () => {
   const f = fixture();
   const widget = { name: 'file', value: 'previous.mp4', options: { values: ['previous.mp4'] } };

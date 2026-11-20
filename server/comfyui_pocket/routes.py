@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from aiohttp import web
 from server import PromptServer
 
+from .canvas_cache import canvas_cache
 from .catalog import Catalog, MAX_BYTES, VERSION
 from .media import delete_media, import_media, list_output
 
@@ -58,14 +59,18 @@ async def read_json(request):
 
 
 def register_routes():
+    import folder_paths
+
     routes = PromptServer.instance.routes
+    snapshot = Path(folder_paths.get_user_directory()) / "pocket-cache" / "node-definitions.json"
+    PromptServer.instance.app.middlewares.insert(0, canvas_cache(snapshot))
     from .pairing_routes import register_pairing_routes
     register_pairing_routes(PromptServer.instance, catalog_for, same_origin, read_json)
 
     @routes.get("/pocket/v1/info")
     async def info(request):
         return web.json_response({"version": VERSION, "protocol": 1, "transport": "direct",
-                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort", "canvas-assets", "iroh-pairing"]})
+                                  "capabilities": ["catalog", "api-prompt", "frontend-export", "auto-sync", "media-delete", "output-browser", "output-sort", "canvas-assets", "iroh-pairing", "canvas-cache"]})
 
     @routes.get("/pocket/v1/outputs")
     @routes.get("/pocket/v1/inputs")

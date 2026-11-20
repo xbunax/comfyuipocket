@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @MainActor
 final class ComfyClient {
@@ -9,6 +10,7 @@ final class ComfyClient {
     let clientID: String
     private var session: URLSession
     private var socket: URLSessionWebSocketTask?
+    private var nodeDefinitionFetch: Task<Data, Error>?
     private var sizeCache: [String: (bytes: Int64?, expires: Date)] = [:]
     private var pendingSizes: [String: Task<Int64?, Never>] = [:]
     init(baseURL: URL, serverID: String? = nil, loopbackAccess: LoopbackAccess? = nil, displayAddress: String? = nil,
@@ -66,6 +68,34 @@ final class ComfyClient {
     func hardwareJSON(_ path: String) async throws -> JSONValue {
         var r = try request(path); r.timeoutInterval = 3; r.cachePolicy = .reloadIgnoringLocalCacheData
         return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
+    }
+    func nodeDefinitions() async throws -> Data {
+        if let nodeDefinitionFetch { return try await nodeDefinitionFetch.value }
+        let fetch = Task { try await fetchNodeDefinitions() }
+        nodeDefinitionFetch = fetch
+        defer { nodeDefinitionFetch = nil }
+        return try await fetch.value
+    }
+    private func fetchNodeDefinitions() async throws -> Data {
+        let cache = NodeDefinitionsCache.shared
+        let previous = await cache.read(serverID)
+        let header = "X-Pocket-Node-Revision"
+        var request = try request("object_info")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue(previous?.revision ?? "none", forHTTPHeaderField: header)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw PocketError.message("服务器没有返回节点定义。")
+        }
+        if http.statusCode == 304, let previous, http.value(forHTTPHeaderField: header) == previous.revision {
+            return previous.data
+        }
+        guard http.statusCode == 200 else {
+            throw PocketError.message("获取节点定义失败（HTTP \(http.statusCode)）。")
+        }
+        guard let revision = http.value(forHTTPHeaderField: header) else { return data }
+        return try await cache.store(data, revision: revision, base: previous,
+            delta: http.value(forHTTPHeaderField: "X-Pocket-Node-Delta") == "1", server: serverID)
     }
     func releaseMemory() async throws {
         let body: JSONValue = .object(["unload_models": .bool(true), "free_memory": .bool(true)])
@@ -232,4 +262,51 @@ final class ComfyClient {
         }
     }
     func disconnect() { socket?.cancel(with: .goingAway, reason: nil); socket = nil }
+}
+
+private actor NodeDefinitionsCache {
+    static let shared = NodeDefinitionsCache()
+    struct Entry: Codable, Sendable {
+        let revision: String
+        let data: Data
+    }
+
+    private let directory = URL.cachesDirectory.appending(path: "PocketNodeDefinitions", directoryHint: .isDirectory)
+
+    private func file(_ server: String) -> URL {
+        let digest = SHA256.hash(data: Data(server.utf8))
+        return directory.appending(path: digest.map { String(format: "%02x", $0) }.joined())
+    }
+
+    func read(_ server: String) -> Entry? {
+        guard let value = try? Data(contentsOf: file(server)) else { return nil }
+        return try? PropertyListDecoder().decode(Entry.self, from: value)
+    }
+
+    func store(_ data: Data, revision: String, base: Entry?, delta: Bool, server: String) throws -> Data {
+        let merged: Data
+        if delta {
+            guard let base,
+                  var definitions = try JSONSerialization.jsonObject(with: base.data) as? [String: Any],
+                  let patch = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let changed = patch["changed"] as? [String: Any],
+                  let removed = patch["removed"] as? [String] else {
+                throw PocketError.message("服务器返回的节点更新无效。")
+            }
+            for name in removed { definitions.removeValue(forKey: name) }
+            definitions.merge(changed) { _, latest in latest }
+            merged = try JSONSerialization.data(withJSONObject: definitions)
+        } else {
+            merged = data
+        }
+        if revision.utf8.count == 64, revision.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) {
+            let encoder = PropertyListEncoder()
+            encoder.outputFormat = .binary
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if let bytes = try? encoder.encode(Entry(revision: revision, data: merged)) {
+                try? bytes.write(to: file(server), options: .atomic)
+            }
+        }
+        return merged
+    }
 }
