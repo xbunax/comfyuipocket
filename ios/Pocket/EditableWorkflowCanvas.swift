@@ -42,6 +42,7 @@ struct WorkflowCanvasView: View {
     @State private var showWorkflows = false
     @State private var showHardware = false
     @State private var hardware = ServerHardware()
+    @State private var releasingMemory = false
     @State private var submitting = false
     @State private var submissionStatus: String?
     @State private var latestPromptID: String?
@@ -344,8 +345,21 @@ struct WorkflowCanvasView: View {
                         .keyboardShortcut(.return, modifiers: .command)
                 }
                 if !session.textEditing {
-                    Button { showHardware = true } label: { CanvasHardwareBar(hardware: hardware) }
-                        .buttonStyle(.plain)
+                    Menu {
+                        Button {
+                            Task { await releaseServerMemory() }
+                        } label: {
+                            Label(releasingMemory ? "正在发送清理请求…" : "清理内存与显存", systemImage: "memorychip")
+                        }
+                        .disabled(!canReleaseServerMemory)
+                    } label: {
+                        CanvasHardwareBar(hardware: hardware)
+                    } primaryAction: {
+                        showHardware = true
+                    }
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .accessibilityHint("点按查看硬件详情，长按打开清理菜单")
                 }
             }.padding(.horizontal, 9).padding(.vertical, 2)
         }
@@ -416,6 +430,22 @@ struct WorkflowCanvasView: View {
                 }.buttonStyle(.borderless).padding(.horizontal, 8)
             }
         }.pocketGlassPanel().padding(.horizontal, 12).padding(.vertical, 4)
+    }
+    private var canReleaseServerMemory: Bool {
+        store.connected && !store.restoringConnection && store.client != nil && !releasingMemory
+    }
+    private func releaseServerMemory() async {
+        guard canReleaseServerMemory, let api = store.client else { return }
+        releasingMemory = true
+        defer { releasingMemory = false }
+        do {
+            try await api.releaseMemory()
+            guard store.client === api else { return }
+            store.notice = "已请求 ComfyUI 清理内存与显存。"
+        } catch {
+            guard store.client === api, store.canvasEditingSession === session else { return }
+            session.error = "清理内存与显存失败：\(error.localizedDescription)"
+        }
     }
     private func pollHardware(_ api: ComfyClient) async {
         var resourcesAvailable: Bool? = nil

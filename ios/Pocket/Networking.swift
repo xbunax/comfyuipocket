@@ -67,6 +67,10 @@ final class ComfyClient {
         var r = try request(path); r.timeoutInterval = 3; r.cachePolicy = .reloadIgnoringLocalCacheData
         return try JSONDecoder().decode(JSONValue.self, from: await checked(r))
     }
+    func releaseMemory() async throws {
+        let body: JSONValue = .object(["unload_models": .bool(true), "free_memory": .bool(true)])
+        _ = try await checked(request("free", method: "POST", body: body))
+    }
     func probeServer() async throws {
         var request = try request("queue")
         request.timeoutInterval = 6

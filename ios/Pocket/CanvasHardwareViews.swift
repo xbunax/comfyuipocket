@@ -13,7 +13,6 @@ struct CanvasHardwareBar: View {
         .padding(.vertical, 5)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityHint("打开服务器硬件详情")
     }
     private func metric(_ name: String, value: Double?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
