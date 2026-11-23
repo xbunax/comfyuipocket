@@ -344,12 +344,21 @@ struct GalleryView: View {
     private enum SectionTab: String {
         case workflow, files
     }
+    private struct BatchTarget {
+        let api: ComfyClient
+        let files: [OutputImage]
+        let mode: ArtworkDeletion
+    }
     @Environment(PocketStore.self) private var store
     @State private var section: SectionTab = .workflow
     @State private var folder = ""
     @State private var preview: ArtworkSequence?
     @State private var removing: OutputImage?
     @State private var expanded: Set<String> = []
+    @State private var selection: ArtworkSelection?
+    @State private var batchTarget: BatchTarget?
+    @State private var batchProgress: Int?
+    @State private var batchMessage: String?
     @AppStorage("mediaSortKey") private var sortKey = "time"
     @AppStorage("mediaSortAscending") private var ascending = false
     @State private var sizes: [String: Int64] = [:]
@@ -364,18 +373,24 @@ struct GalleryView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { galleryTitle; Spacer(minLength: 0); gallerySources }
-                    VStack(alignment: .leading, spacing: 2) {
-                        galleryTitle
-                        HStack { gallerySources }
+                Group {
+                    if let selection {
+                        selectionHeader(count: selection.files.count)
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { galleryTitle; Spacer(minLength: 0); gallerySources; selectButton }
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack { galleryTitle; Spacer(); selectButton }
+                                HStack { gallerySources }
+                            }
+                        }
                     }
                 }.padding(.horizontal, 16).padding(.vertical, 6)
                 Divider()
                 ZStack {
                     PocketBackground()
                     if section == .files {
-                        OutputBrowserView(folder: $folder) { preview = $0 }
+                        OutputBrowserView(folder: $folder, selection: $selection) { preview = $0 }
                             .id(store.client?.serverID ?? "")
                     } else {
                         workflowOutputs
@@ -383,7 +398,8 @@ struct GalleryView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
-                .gesture(GalleryPageSwipe(enabled: preview == nil && (section == .workflow || folder.isEmpty)) { left in
+                .disabled(batchProgress != nil)
+                .gesture(GalleryPageSwipe(enabled: selection == nil && preview == nil && (section == .workflow || folder.isEmpty)) { left in
                     if left && section == .workflow {
                         folder = ""
                         section = .files
@@ -400,6 +416,32 @@ struct GalleryView: View {
                 .id(items.selected.id)
         }
         .workDeletionDialog($removing)
+        .confirmationDialog("删除所选文件？", isPresented: Binding(get: { batchTarget != nil }, set: {
+            if !$0 { batchTarget = nil }
+        }), titleVisibility: .visible, presenting: batchTarget) { target in
+            if target.mode == .work {
+                Button("仅从本机移除 \(target.files.count) 项", role: .destructive) { removeSelection(target, deleteFiles: false) }
+            }
+            if store.pluginCapabilities.contains("media-delete"), target.files.allSatisfy(\.canDeleteServerFile) {
+                Button("永久删除 \(target.files.count) 个文件", role: .destructive) { removeSelection(target, deleteFiles: true) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { target in
+            if target.mode == .serverFile {
+                Text("将从 ComfyUI 服务器永久删除所选的 \(target.files.count) 个文件，包含在其他文件夹选中的文件。")
+            } else {
+                Text("本机移除仅清理作品列表。永久删除会同时清理所选的服务器文件。")
+            }
+        }
+        .alert("批量删除结果", isPresented: Binding(get: { batchMessage != nil }, set: {
+            if !$0 { batchMessage = nil }
+        })) {
+            Button("确定", role: .cancel) { batchMessage = nil }
+        } message: { Text(batchMessage ?? "") }
+        .onChange(of: store.client.map(ObjectIdentifier.init)) { _, _ in
+            selection = nil
+            batchTarget = nil
+        }
         .onChange(of: store.client?.serverID) { _, _ in
             folder = ""; preview = nil; expanded.removeAll(); sizes = [:]
         }
@@ -409,6 +451,62 @@ struct GalleryView: View {
             let result = await api.mediaSizes(store.images)
             guard !Task.isCancelled, store.client === api else { return }
             sizes = result; readingSizes = false
+        }
+    }
+
+    private var selectButton: some View {
+        Button("选择") { selection = ArtworkSelection() }
+            .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
+            .disabled(batchProgress != nil || store.client == nil
+                      || (section == .workflow ? groups.isEmpty : !store.pluginCapabilities.contains("media-delete")))
+            .accessibilityIdentifier("gallery.select")
+    }
+
+    private func selectionHeader(count: Int) -> some View {
+        HStack(spacing: 12) {
+            Button("完成") { selection = nil }.disabled(batchProgress != nil)
+                .frame(minHeight: 44)
+            Spacer(minLength: 0)
+            if let progress = batchProgress {
+                ProgressView()
+                Text("已处理 \(progress)/\(count)").font(.subheadline.monospacedDigit())
+            } else {
+                Text("已选 \(count) 项").font(.subheadline.monospacedDigit())
+            }
+            Spacer(minLength: 0)
+            Button("批量删除", systemImage: "trash", role: .destructive) {
+                guard let client = store.client, let files = selection?.files.values, !files.isEmpty else { return }
+                batchTarget = BatchTarget(api: client, files: files.sorted { $0.fileID < $1.fileID },
+                                         mode: section == .workflow ? .work : .serverFile)
+            }
+            .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+            .disabled(count == 0 || batchProgress != nil)
+            .accessibilityIdentifier("gallery.delete-selected")
+        }
+    }
+
+    private func removeSelection(_ target: BatchTarget, deleteFiles: Bool) {
+        guard batchProgress == nil else { return }
+        batchProgress = 0
+        Task {
+            defer { batchProgress = nil }
+            do {
+                let result = try await store.removeOutputs(target.files, from: target.api, deleteFiles: deleteFiles) {
+                    batchProgress = $0
+                }
+                guard store.client === target.api else { return }
+                selection?.remove(result.completed)
+                let remaining = target.files.count - result.completed.count
+                if remaining > 0 {
+                    let details = ([result.unconfirmed.first, result.archiveWarning].compactMap { $0 }).joined(separator: "\n")
+                    batchMessage = "已处理 \(result.completed.count) 项，\(remaining) 项未确认，仍保留选择。\n\(details)"
+                } else {
+                    selection = nil
+                    store.notice = result.archiveWarning ?? (deleteFiles
+                        ? "已永久删除 \(result.completed.count) 个服务器文件。"
+                        : "已从本机作品中移除 \(result.completed.count) 项。")
+                }
+            } catch { batchMessage = error.localizedDescription }
         }
     }
 
@@ -423,7 +521,14 @@ struct GalleryView: View {
                     Text("\(items.count) 个任务 · \(items.reduce(0) { $0 + $1.outputs.count }) 件作品")
                         .font(.subheadline.weight(.medium))
                     Spacer()
-                    Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
+                    if let selection {
+                        let outputs = items.flatMap(\.outputs)
+                        Button(selection.containsAll(outputs) ? "取消全选" : "全选作品") {
+                            self.selection?.toggle(outputs)
+                        }.font(.caption)
+                    } else {
+                        Button("全部折叠") { expanded.removeAll() }.font(.caption).disabled(expanded.isEmpty)
+                    }
                 }.padding(.horizontal, 20).padding(.top, 8)
                 if order == .size {
                     Text(readingSizes ? "正在读取文件大小…" : "按任务产物合计大小排序")
@@ -436,7 +541,7 @@ struct GalleryView: View {
                         }), onPreview: { file in
                             let ordered = MediaOrdering.outputs(group.outputs, key: order, ascending: ascending, sizes: sizes)
                             preview = ArtworkSequence(selected: file, items: ordered)
-                        }, removing: $removing, sortKey: order, ascending: ascending, sizes: sizes)
+                        }, removing: $removing, selection: $selection, sortKey: order, ascending: ascending, sizes: sizes)
                     }
                 }.padding(16)
             }.contentMargins(.bottom, 28, for: .scrollContent)
@@ -505,55 +610,104 @@ private struct GalleryTaskCard: View {
     @Binding var expanded: Bool
     let onPreview: (OutputImage) -> Void
     @Binding var removing: OutputImage?
+    @Binding var selection: ArtworkSelection?
     var sortKey: MediaSortKey = .time
     var ascending = false
     var sizes: [String: Int64] = [:]
     private var orderedOutputs: [OutputImage] { MediaOrdering.outputs(group.outputs, key: sortKey, ascending: ascending, sizes: sizes) }
     var body: some View {
         VStack(spacing: 0) {
-            Button {
-                withAnimation(.snappy) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 12) {
-                    if let cover = orderedOutputs.first {
-                        RemoteImage(output: cover).frame(width: 64, height: 72).clipped().clipShape(.rect(cornerRadius: 12))
+            HStack(spacing: 0) {
+                if let selection {
+                    let selected = selection.containsAll(group.outputs)
+                    Button {
+                        self.selection?.toggle(group.outputs)
+                    } label: {
+                        ArtworkSelectionMark(selected: selected).frame(width: 44, height: 44)
                     }
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(PocketPalette.text)
-                        Text(group.summary).font(.caption).foregroundStyle(PocketPalette.secondary)
-                        if let bytes = MediaOrdering.totalSize(group.outputs, sizes: sizes) {
-                            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.caption2).foregroundStyle(PocketPalette.secondary)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(selected ? "取消选择此任务的产物" : "选择此任务的全部产物")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .padding(.leading, 6)
+                }
+                Button {
+                    withAnimation(.snappy) { expanded.toggle() }
+                } label: {
+                    HStack(spacing: 12) {
+                        if let cover = orderedOutputs.first {
+                            RemoteImage(output: cover).frame(width: 64, height: 72).clipped().clipShape(.rect(cornerRadius: 12))
                         }
-                        Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(PocketPalette.secondary)
-                        if group.createdAt > 1_000_000_000 {
-                            Text(Date(timeIntervalSince1970: group.createdAt), format: .dateTime.month().day().hour().minute())
-                                .font(.caption2).foregroundStyle(PocketPalette.secondary)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(2).foregroundStyle(PocketPalette.text)
+                            Text(group.summary).font(.caption).foregroundStyle(PocketPalette.secondary)
+                            if let bytes = MediaOrdering.totalSize(group.outputs, sizes: sizes) {
+                                Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).font(.caption2).foregroundStyle(PocketPalette.secondary)
+                            }
+                            Text("ID \(group.taskID)").font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(PocketPalette.secondary)
+                            if group.createdAt > 1_000_000_000 {
+                                Text(Date(timeIntervalSince1970: group.createdAt), format: .dateTime.month().day().hour().minute())
+                                    .font(.caption2).foregroundStyle(PocketPalette.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(PocketPalette.secondary)
+                    }.padding(14).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityValue(expanded ? "已展开" : "已折叠")
+                    .contextMenu {
+                        if selection == nil {
+                            Button("复制任务 ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = group.taskID }
                         }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(PocketPalette.secondary)
-                }.padding(14).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityValue(expanded ? "已展开" : "已折叠")
-                .contextMenu { Button("复制任务 ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = group.taskID } }
+                    }
+            }
             if expanded {
                 Divider().padding(.horizontal, 14)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 10)], spacing: 10) {
                     ForEach(orderedOutputs) { image in
+                        let isSelected = selection?.files[image.fileID] != nil
                         VStack(alignment: .leading, spacing: 8) {
-                            Button { onPreview(image) } label: {
+                            Button {
+                                if selection == nil { onPreview(image) }
+                                else { selection?.toggle([image]) }
+                            } label: {
                                 RemoteImage(output: image).frame(height: 150).clipped().clipShape(.rect(cornerRadius: 12))
-                            }.buttonStyle(.plain)
+                                    .overlay(alignment: .topTrailing) {
+                                        if selection != nil { ArtworkSelectionMark(selected: isSelected).padding(7) }
+                                    }
+                            }
+                            .buttonStyle(.plain).accessibilityLabel(image.filename)
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
                             HStack {
                                 Text(image.filename).font(.caption2).lineLimit(1).foregroundStyle(PocketPalette.secondary)
                                 Spacer(minLength: 0)
-                                Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
-                                    .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.assetID))
+                                if selection == nil {
+                                    Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
+                                        .labelStyle(.iconOnly).buttonStyle(.borderless).disabled(store.deletingOutputs.contains(image.fileID))
+                                }
                             }
-                        }.contextMenu { Button("删除作品", systemImage: "trash", role: .destructive) { removing = image } }
+                        }.contextMenu {
+                            if selection == nil {
+                                Button("删除作品", systemImage: "trash", role: .destructive) { removing = image }
+                                    .disabled(store.deletingOutputs.contains(image.fileID))
+                            }
+                        }
                     }
                 }.padding(14)
             }
         }.background(PocketPalette.surface, in: .rect(cornerRadius: 20))
             .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(PocketPalette.text.opacity(0.05)))
+    }
+}
+
+struct ArtworkSelectionMark: View {
+    let selected: Bool
+
+    var body: some View {
+        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(selected ? PocketPalette.accent : PocketPalette.text)
+            .padding(4)
+            .background(.regularMaterial, in: .circle)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }
 

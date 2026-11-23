@@ -165,7 +165,7 @@ struct ImageDetail: View {
                 Button(role: .destructive) { removing = output } label: {
                     Image(systemName: "trash").frame(width: 44, height: 44)
                 }.buttonStyle(.glass)
-                    .disabled(store.deletingOutputs.contains(output.assetID) || saving)
+                    .disabled(store.deletingOutputs.contains(output.fileID) || saving)
                     .accessibilityLabel(deletion == .serverFile ? "删除服务器文件" : "删除作品")
             }
         }

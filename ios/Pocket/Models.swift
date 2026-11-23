@@ -315,6 +315,8 @@ struct OutputImage: Codable, Equatable, Identifiable, Sendable {
     var portableSubfolder: String { subfolder.replacingOccurrences(of: "\\", with: "/") }
     var id: String { "\(promptID)/\(type)/\(subfolder)/\(filename)" }
     var assetID: String { "\(type)/\(subfolder)/\(filename)" }
+    var fileID: String { "\(type)/\(portableSubfolder)/\(filename)" }
+    var canDeleteServerFile: Bool { type == "output" || type == "temp" }
     var isVideo: Bool { ["mp4", "mov", "webm", "m4v", "avi", "mkv"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()) }
     var mimeType: String {
         switch URL(fileURLWithPath: filename).pathExtension.lowercased() {

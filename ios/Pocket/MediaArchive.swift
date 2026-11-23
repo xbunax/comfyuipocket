@@ -1,5 +1,25 @@
 import Foundation
 
+struct ArtworkSelection {
+    private(set) var files: [String: OutputImage] = [:]
+
+    func containsAll(_ outputs: [OutputImage]) -> Bool {
+        !outputs.isEmpty && outputs.allSatisfy { files[$0.fileID] != nil }
+    }
+
+    mutating func toggle(_ outputs: [OutputImage]) {
+        if containsAll(outputs) {
+            remove(Set(outputs.map(\.fileID)))
+        } else {
+            for output in outputs { files[output.fileID] = output }
+        }
+    }
+
+    mutating func remove(_ ids: Set<String>) {
+        for id in ids { files.removeValue(forKey: id) }
+    }
+}
+
 struct MediaArchive: Codable, Equatable {
     var outputs: [OutputImage] = []
     var removedOutputIDs: Set<String> = []
@@ -42,10 +62,18 @@ struct MediaArchive: Codable, Equatable {
             return a == b ? (order[$0.id] ?? 0) < (order[$1.id] ?? 0) : a > b
         }
     }
-    mutating func remove(_ output: OutputImage) {
-        removedOutputIDs.insert(output.id)
-        for item in outputs where item.assetID == output.assetID { removedOutputIDs.insert(item.id) }
-        outputs.removeAll { $0.assetID == output.assetID }
+    mutating func remove(_ output: OutputImage) { remove([output]) }
+
+    mutating func remove(_ items: [OutputImage]) {
+        let files = Set(items.map(\.fileID))
+        removedOutputIDs.formUnion(items.map(\.id))
+        var historyIDs: [String] = []
+        outputs.removeAll {
+            guard files.contains($0.fileID) else { return false }
+            historyIDs.append($0.id)
+            return true
+        }
+        removedOutputIDs.formUnion(historyIDs)
     }
     var gallery: [OutputImage] {
         var seen = Set<String>()

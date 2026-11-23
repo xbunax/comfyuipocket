@@ -3,6 +3,7 @@ import SwiftUI
 struct OutputBrowserView: View {
     @Environment(PocketStore.self) private var store
     @Binding var folder: String
+    @Binding var selection: ArtworkSelection?
     let onPreview: (ArtworkSequence) -> Void
     @AppStorage("outputBrowserLayout") private var displayLayout = "grid"
     @AppStorage("mediaSortKey") private var sortKey = "time"
@@ -31,11 +32,18 @@ struct OutputBrowserView: View {
                         HStack {
                             Text("\(total) 项").font(.caption).foregroundStyle(PocketPalette.secondary)
                             Spacer()
-                            layoutMenu
-                            MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
-                                .disabled(!store.pluginCapabilities.contains("output-sort"))
-                            Button("刷新", systemImage: "arrow.clockwise") { Task { await load() } }
-                                .labelStyle(.iconOnly).disabled(loading)
+                            if let selection {
+                                let loaded = files.map(\.output)
+                                Button(selection.containsAll(loaded) ? "取消全选当前目录" : "全选已加载文件") {
+                                    self.selection?.toggle(loaded)
+                                }.font(.subheadline).disabled(loaded.isEmpty)
+                            } else {
+                                layoutMenu
+                                MediaSortMenu(sortKey: $sortKey, ascending: $ascending)
+                                    .disabled(!store.pluginCapabilities.contains("output-sort"))
+                                Button("刷新", systemImage: "arrow.clockwise") { Task { await load() } }
+                                    .labelStyle(.iconOnly).disabled(loading)
+                            }
                         }
                         if !store.pluginCapabilities.contains("output-sort") {
                             Text("目录排序需要电脑端 Pocket 插件 v0.8.0；当前按时间从新到旧显示。")
@@ -125,7 +133,11 @@ struct OutputBrowserView: View {
                                     Text(Date(timeIntervalSince1970: Double(entry.modified) / 1000), format: .dateTime.month().day().hour().minute())
                                         .font(.caption2).foregroundStyle(PocketPalette.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading)
-                                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                                if selection == nil {
+                                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                                } else {
+                                    Color.clear.frame(width: 24)
+                                }
                             }.padding(12).contentShape(Rectangle())
                         }
                         if entry.id != files.last?.id { Divider().padding(.leading, 92) }
@@ -156,12 +168,23 @@ struct OutputBrowserView: View {
     }
 
     private func fileButton<Label: View>(_ entry: OutputDirectoryEntry, @ViewBuilder label: () -> Label) -> some View {
-        Button { preview(entry.output) } label: { label() }
+        let isSelected = selection?.files[entry.output.fileID] != nil
+        return Button {
+            if selection == nil { preview(entry.output) }
+            else { selection?.toggle([entry.output]) }
+        } label: {
+            label()
+                .overlay(alignment: .topTrailing) {
+                    if selection != nil { ArtworkSelectionMark(selected: isSelected).padding(7) }
+                }
+        }
             .buttonStyle(.plain).hoverEffect(.highlight)
+            .accessibilityLabel(entry.name)
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
             .contextMenu {
-                if store.pluginCapabilities.contains("media-delete") {
+                if selection == nil && store.pluginCapabilities.contains("media-delete") {
                     Button("删除服务器文件", systemImage: "trash", role: .destructive) { removing = entry.output }
-                        .disabled(store.deletingOutputs.contains(entry.output.assetID))
+                        .disabled(store.deletingOutputs.contains(entry.output.fileID))
                 }
             }
     }

@@ -4,6 +4,12 @@ enum ArtworkDeletion: Equatable {
     case work, serverFile
 }
 
+struct ArtworkRemovalResult {
+    var completed: Set<String> = []
+    var unconfirmed: [String] = []
+    var archiveWarning: String?
+}
+
 enum TaskRemovalTarget: Identifiable {
     case task(GenerationTask), prompt(String)
     var id: String {
@@ -56,37 +62,83 @@ extension PocketStore {
     }
     func removeOutput(_ output: OutputImage, deleteFile: Bool) async throws -> Bool {
         guard let api = client else { throw PocketError.message("请先选择服务器。") }
-        let server = api.serverID
-        guard deletingOutputs.insert(output.assetID).inserted else { return false }
-        defer { deletingOutputs.remove(output.assetID) }
-        if deleteFile {
+        guard !deletingOutputs.contains(output.fileID) else { return false }
+        let result = try await removeOutputs([output], from: api, deleteFiles: deleteFile)
+        if let reason = result.unconfirmed.first { throw PocketError.message(reason) }
+        if client === api {
+            notice = result.archiveWarning ?? (deleteFile ? "已删除服务器文件。" : "已从本机作品中移除。")
+        }
+        return result.completed.contains(output.fileID)
+    }
+
+    func removeOutputs(_ outputs: [OutputImage], from api: ComfyClient, deleteFiles: Bool,
+                       progress: (Int) -> Void = { _ in }) async throws -> ArtworkRemovalResult {
+        guard client === api else { throw PocketError.message("服务器连接已改变，请重新选择文件。") }
+        if deleteFiles {
             guard pluginCapabilities.contains("media-delete") else {
                 throw PocketError.message("请更新电脑端 Pocket 插件并重启 ComfyUI。")
             }
-            let result = try await api.json("pocket/v1/media/delete", method: "POST", body: .object([
-                "filename": .string(output.filename), "subfolder": .string(output.portableSubfolder), "type": .string(output.type)
-            ]))
-            guard result["deleted"] == .bool(true) else { throw PocketError.message("服务器未确认删除文件。") }
+            guard outputs.allSatisfy(\.canDeleteServerFile) else {
+                throw PocketError.message("选中的文件包含不能从服务器删除的项目。")
+            }
         }
+
+        var seen = Set<String>()
+        let unique = outputs.filter { seen.insert($0.fileID).inserted }
+        let pending = Set(unique.map(\.fileID)).subtracting(deletingOutputs)
+        deletingOutputs.formUnion(pending)
+        defer { deletingOutputs.subtract(pending) }
+
+        var result = ArtworkRemovalResult()
+        var removed: [OutputImage] = []
+        for (index, output) in unique.enumerated() {
+            if client !== api || Task.isCancelled {
+                result.unconfirmed.append("连接已改变或操作中断。")
+                break
+            }
+            if !pending.contains(output.fileID) {
+                result.unconfirmed.append("\(output.filename)：文件正在删除。")
+            } else {
+                do {
+                    if deleteFiles {
+                        let response = try await api.json("pocket/v1/media/delete", method: "POST", body: .object([
+                            "filename": .string(output.filename), "subfolder": .string(output.portableSubfolder),
+                            "type": .string(output.type)
+                        ]))
+                        guard response["deleted"] == .bool(true) else {
+                            throw PocketError.message("服务器未确认删除。")
+                        }
+                    }
+                    removed.append(output)
+                } catch {
+                    result.unconfirmed.append("\(output.filename)：\(error.localizedDescription)")
+                }
+            }
+            progress(index + 1)
+        }
+
+        guard !removed.isEmpty else { return result }
+        result.completed = Set(removed.map(\.fileID))
+        let server = api.serverID
         let previous = mediaArchives[server]
         var archive = previous ?? MediaArchive()
-        archive.remove(output)
+        let aliases = archive.outputs.filter { result.completed.contains($0.fileID) }
+        archive.remove(removed)
         mediaArchives[server] = archive
         do { try persistMediaArchives() }
         catch {
-            if !deleteFile {
+            if !deleteFiles {
                 mediaArchives[server] = previous
                 throw error
             }
-            if client === api { notice = "服务器文件已删除，本机作品记录保存失败。" }
-            await MediaCache.shared.invalidate(resource: api.cacheResource(api.mediaURL(output)))
-            if output.type == "output", client?.serverID == server { outputDirectoryRevision = UUID() }
-            return true
+            result.archiveWarning = "服务器文件已删除，本机作品记录保存失败。"
         }
-        await MediaCache.shared.invalidate(resource: api.cacheResource(api.mediaURL(output)))
-        if deleteFile, output.type == "output", client?.serverID == server { outputDirectoryRevision = UUID() }
-        if client === api { notice = deleteFile ? "已删除服务器文件。" : "已从本机作品中移除。" }
-        return true
+        let resources = Set((removed + aliases).map { api.cacheResource(api.mediaURL($0)) })
+        for resource in resources { await MediaCache.shared.invalidate(resource: resource) }
+        if deleteFiles, client?.serverID == server, removed.contains(where: { $0.type == "output" }) {
+            outputDirectoryRevision = UUID()
+        }
+        return result
     }
 }
 
@@ -118,7 +170,7 @@ private struct WorkDeletionDialog: ViewModifier {
                     if mode == .work {
                         Button("仅从本机作品移除", role: .destructive) { remove(output, for: server, deleteFile: false) }
                     }
-                    if store.pluginCapabilities.contains("media-delete") {
+                    if store.pluginCapabilities.contains("media-delete"), output.canDeleteServerFile {
                         Button("永久删除服务器文件", role: .destructive) { remove(output, for: server, deleteFile: true) }
                     }
                     Button("取消", role: .cancel) { }
@@ -126,6 +178,8 @@ private struct WorkDeletionDialog: ViewModifier {
                     let path = [output.type, output.subfolder, output.filename].filter { !$0.isEmpty }.joined(separator: "/")
                     if mode == .serverFile {
                         Text("\(path)\n服务器上的文件会永久删除。")
+                    } else if !output.canDeleteServerFile {
+                        Text("\(path)\n此文件只能从本机作品列表中移除。")
                     } else {
                         Text(store.pluginCapabilities.contains("media-delete")
                              ? "\(path)\n从本机移除只清理作品列表。永久删除会移除电脑文件。"
