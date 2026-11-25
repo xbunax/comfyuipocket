@@ -25,6 +25,7 @@ final class PocketStore {
     var activeNode = ""
     var activePrompt = ""
     var preview: Data?
+    @ObservationIgnored private var nodeSamplingRun = NodeSamplingRun()
     var pluginAvailable = false
     var syncStatus = "等待连接"
     var syncing = false
@@ -308,6 +309,7 @@ final class PocketStore {
         irohTransport?.stop(); irohTransport = nil
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
         preview = nil; progress = 0; activeNode = ""; activePrompt = ""
+        nodeSamplingRun = NodeSamplingRun()
         pluginAvailable = false; syncing = false; syncStatus = "等待连接"
         pluginCapabilities = []
     }
@@ -315,7 +317,10 @@ final class PocketStore {
         guard canMonitorServer, client === api else { return }
         events?.cancel()
         events = Task { [weak self] in
-            await api.listen(event: { [weak self] event in self?.handle(event) },
+            await api.listen(event: { [weak self, weak api] event in
+                guard let self, let api, self.client === api else { return }
+                self.handle(event)
+            },
                              preview: { [weak self] data in if let self, !self.suspended { self.preview = data } },
                              state: { [weak self] state in self?.socketConnected = state })
         }
@@ -431,20 +436,50 @@ final class PocketStore {
         switch event["type"].text {
         case "execution_start":
             activePrompt = d["prompt_id"].text; progress = 0; preview = nil
+            nodeSamplingRun.begin(activePrompt)
             updateGenerationActivities()
         case "progress":
-            if let prompt = d["prompt_id"].text.nonEmpty { activePrompt = prompt }
+            if let prompt = d["prompt_id"].text.nonEmpty {
+                activePrompt = prompt
+                if !suspended { nodeSamplingRun.begin(prompt) }
+            }
             progress = d["max"].double > 0 ? min(1, d["value"].double / d["max"].double) : 0
             updateGenerationActivities()
         case "executing":
             activeNode = d["node"].text
-            if d["node"] == .null { progress = 1; activePrompt = ""; Task { await refresh() } }
+            if d["node"] == .null {
+                nodeSamplingRun.end(d["prompt_id"].text)
+                progress = 1; activePrompt = ""; Task { await refresh() }
+            } else if let id = d["prompt_id"].text.nonEmpty {
+                nodeSamplingRun.begin(id)
+            }
+        case "kj_preview_override":
+            guard !suspended, let frame = nodeSamplingRun.receive(d) else { return }
+            deliverSamplingPreviews([frame])
         case "execution_error":
+            nodeSamplingRun.end(d["prompt_id"].text)
             error = "节点 \(d["node_id"].text)：\(d["exception_message"].text)"; activePrompt = ""; Task { await refresh() }
-        case "execution_interrupted": activePrompt = ""; progress = 0; Task { await refresh() }
-        case "executed", "execution_success", "status": Task { await refresh() }
+        case "execution_interrupted":
+            nodeSamplingRun.end(d["prompt_id"].text)
+            activePrompt = ""; progress = 0; Task { await refresh() }
+        case "execution_success":
+            nodeSamplingRun.end(d["prompt_id"].text)
+            Task { await refresh() }
+        case "executed", "status": Task { await refresh() }
         default: break
         }
+    }
+    func replaySamplingPreviews() {
+        deliverSamplingPreviews(nodeSamplingRun.buffer.frames)
+    }
+    private func deliverSamplingPreviews(_ frames: [NodeSamplingFrame]) {
+        guard !frames.isEmpty, !suspended, let promptID = nodeSamplingRun.promptID,
+              let workflowID = canvasEditingID, let session = canvasEditingSession, session.loaded,
+              let item = currentGenerationTasks.lazy.filter({ $0.workflowID == workflowID }).compactMap({
+                  $0.items.first { $0.id == promptID }
+              }).first else { return }
+        let matching = frames.filter { item.prompt[$0.nodeID]?["class_type"] == .string("ModelPreviewOverrideKJ") }
+        session.offerSamplingPreviews(matching, promptID: promptID)
     }
     func refresh() async {
         guard canMonitorServer, !restoringConnection, connectionRecoveryError == nil, let api = client else { return }
@@ -515,6 +550,7 @@ final class PocketStore {
                 if let taskIndex = generationTasks.firstIndex(where: { $0.id == taskID }) {
                     generationTasks[taskIndex].items.append(GenerationItem(id: promptID, prompt: submitted.prompt, sequence: index))
                 }
+                if nodeSamplingRun.promptID == promptID { replaySamplingPreviews() }
                 saveGenerationTasks()
                 queued += 1
                 updateGenerationActivities()

@@ -99,6 +99,7 @@ struct WorkflowCanvasView: View {
                         store.canvasEditingSession = session
                         store.canvasSessions.attach(session)
                         session.open(workflow: workflow, api: api)
+                        store.replaySamplingPreviews()
                         await session.applyAppearance()
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
@@ -202,6 +203,9 @@ struct WorkflowCanvasView: View {
             .onChange(of: PocketAppearance.shared.overviewTapFocus) { _, _ in Task { await session.applyAppearance() } }
             .onChange(of: PocketAppearance.shared.colorway) { _, _ in Task { await session.applyAppearance() } }
             .onChange(of: session.available) { _, available in if available { Task { await session.applyAppearance() } } }
+            .onChange(of: session.loaded) { _, loaded in
+                if loaded, store.canvasEditingSession === session { store.replaySamplingPreviews() }
+            }
             .onDisappear {
                 if store.canvasEditingSession === session { store.canvasEditingID = nil; store.canvasEditingSession = nil }
                 store.canvasSessions.detach(session)
@@ -630,6 +634,52 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     @ObservationIgnored private var revision: CanvasRevision?
     @ObservationIgnored private var pendingRevision: CanvasRevision?
     @ObservationIgnored private var viewportSize = CGSize.zero
+    @ObservationIgnored private var samplingPromptID: String?
+    @ObservationIgnored private var samplingOffered: [String: UUID] = [:]
+    @ObservationIgnored private var samplingPending = NodeSamplingBuffer()
+    @ObservationIgnored private var samplingDelivery: Task<Void, Never>?
+
+    func offerSamplingPreviews(_ frames: [NodeSamplingFrame], promptID: String) {
+        guard loaded, !frames.isEmpty else { return }
+        if samplingPromptID != promptID {
+            samplingPromptID = promptID
+            samplingPending = NodeSamplingBuffer()
+            samplingOffered.removeAll()
+        }
+        for frame in frames where samplingOffered[frame.slot] != frame.id {
+            if samplingOffered.count >= 32 { samplingOffered.removeAll() }
+            samplingOffered[frame.slot] = frame.id
+            samplingPending.append(frame)
+        }
+        guard samplingDelivery == nil, !samplingPending.frames.isEmpty else { return }
+        samplingDelivery = Task { [weak self] in
+            while !Task.isCancelled {
+                // Sampling bursts should not enqueue unbounded WebKit work.
+                do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
+                guard let self else { return }
+                let promptID = self.samplingPromptID
+                let frames = self.samplingPending.frames
+                self.samplingPending = NodeSamplingBuffer()
+                if frames.isEmpty || !self.loaded {
+                    self.samplingDelivery = nil
+                    return
+                }
+                for frame in frames {
+                    guard !Task.isCancelled, self.loaded, self.samplingPromptID == promptID else { break }
+                    let payload = String(decoding: frame.payload, as: UTF8.self)
+                    _ = try? await self.call("samplingPreview", arguments: ["payload": payload])
+                }
+            }
+        }
+    }
+
+    private func clearSamplingPreviews() {
+        samplingDelivery?.cancel()
+        samplingDelivery = nil
+        samplingPromptID = nil
+        samplingOffered.removeAll()
+        samplingPending = NodeSamplingBuffer()
+    }
 
     func view() -> WKWebView {
         if let webView { return webView }
@@ -665,6 +715,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         let plan = CanvasOpenPlan.resolve(sameServer: self.baseURL == baseURL, runtimeReady: runtimeReady,
             available: available, current: revision, incoming: incoming, force: force)
         if plan == .reuse { reused = true; return }
+        clearSamplingPreviews()
         self.baseURL = baseURL; loading = true; loaded = false; available = false; textEditing = false; scene = MobileCanvasScene(); focusedNodeID = ""; nodeFocusActive = false; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
         reused = false; pendingRevision = incoming
         do { initialText = String(decoding: try JSONEncoder().encode(workflow), as: UTF8.self) }
@@ -685,6 +736,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         revision = CanvasRevision(workflow); pendingRevision = revision
     }
     func discard() {
+        clearSamplingPreviews()
         webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketCanvas")
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketNodeDefinitions", contentWorld: .page)
@@ -695,6 +747,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         guard let webView else { throw PocketError.message("画布尚未启动。") }
         let scripts: [String: String] = [
             "scene": "return window.PocketCanvas.scene();",
+            "samplingPreview": "return window.PocketCanvas.samplingPreview(payload);",
             "prepareAsset": "return window.PocketCanvas.prepareAsset(x, y, asset, token);",
             "importAsset": "return await window.PocketCanvas.importAsset(token, value);",
             "overviewPreference": "return window.PocketCanvas.overviewPreference(enabled);",

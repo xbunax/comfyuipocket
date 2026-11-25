@@ -17,6 +17,13 @@
     return node;
   }
 
+  function showSamplingPreview(graph, payload) {
+    const node = executionNode(graph, payload?.node_id);
+    if (node?.type !== "ModelPreviewOverrideKJ" || typeof node._kjPreviewHandler !== "function") return false;
+    node._kjPreviewHandler(payload);
+    return true;
+  }
+
   function workspaceRestored(app) {
     // setup() finishes before GraphCanvas restores persisted workflow tabs.
     // These public stores cover both current and older frontend versions.
@@ -466,7 +473,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installOverviewTap, executionNode, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, dropReferenceAsset, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
+    module.exports = { installOverviewTap, executionNode, showSamplingPreview, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, dropReferenceAsset, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -723,6 +730,10 @@
     delete: "Comfy.Canvas.DeleteSelectedItems"
   };
   window.PocketCanvas = {
+    samplingPreview(payload) {
+      if (!loaded || app.rootGraph.id !== ownedGraphID) return false;
+      return showSamplingPreview(app.rootGraph, JSON.parse(payload));
+    },
     prepareAsset(x, y, asset, token) {
       pendingAsset = undefined;
       if (!loaded || app.rootGraph.id !== ownedGraphID || textEditor?.busy) throw new Error("请先完成当前编辑。");

@@ -238,6 +238,7 @@ final class ComfyClient {
                 var c = URLComponents(url: r.url!, resolvingAgainstBaseURL: false)!
                 c.scheme = c.scheme == "https" ? "wss" : "ws"; r.url = c.url
                 let ws = session.webSocketTask(with: r)
+                ws.maximumMessageSize = 12 * 1024 * 1024 // KJNodes may send an animated clip in a single JSON event.
                 attempt = ws; socket = ws; ws.resume()
                 while !Task.isCancelled {
                     let message = try await ws.receive()

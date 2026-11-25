@@ -4,6 +4,7 @@ const { executionNode, applyPrompt, ports, connect, disconnect } = require('../i
 const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
 const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
 const { assetInputWidget, dropReferenceAsset } = require('../ios/Pocket/CanvasBridge.js');
+const { showSamplingPreview } = require('../ios/Pocket/CanvasBridge.js');
 
 test('canvas bootstrap shares node definitions and preserves ordinary authenticated fetches', async () => {
   const vm = require('node:vm'), fs = require('node:fs');
@@ -284,6 +285,21 @@ test('execution node IDs resolve through nested subgraph instances', () => {
   const graph = { _nodes: [{ id: 2, subgraph: { _nodes: [{ id: 4, subgraph: { _nodes: [leaf] } }] } }] };
   assert.equal(executionNode(graph, '2:4:9'), leaf);
   assert.equal(executionNode(graph, '2:missing:9'), null);
+});
+
+test('KJ sampling events only reach the requested preview node, including inside subgraphs', () => {
+  const calls = [];
+  const other = { id: 329, type: 'ModelPreviewOverrideKJ', _kjPreviewHandler: () => assert.fail('root node received a subgraph preview') };
+  const nested = { id: 329, type: 'ModelPreviewOverrideKJ', _kjPreviewHandler: data => calls.push(data) };
+  const wrongType = { id: 330, type: 'PreviewImage', _kjPreviewHandler: () => assert.fail('wrong node type') };
+  const graph = { _nodes: [other, { id: 2, subgraph: { _nodes: [nested, wrongType] } }] };
+  const schedule = { node_id: '2:329', step: 0, total: 20, sigmas: [1, 0] };
+  const clip = { node_id: '2:329', step: 2, total: 20, image: 'AAEC', mime: 'video/mp4', fps: 12 };
+  assert.equal(showSamplingPreview(graph, schedule), true);
+  assert.equal(showSamplingPreview(graph, clip), true);
+  assert.equal(showSamplingPreview(graph, { ...clip, node_id: '2:330' }), false);
+  assert.equal(showSamplingPreview(graph, { ...clip, node_id: '3:329' }), false);
+  assert.deepEqual(calls, [schedule, clip]);
 });
 
 const { mobileScene, setMobileWidget, moveMobileNode } = require('../ios/Pocket/CanvasBridge.js');
