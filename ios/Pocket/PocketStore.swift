@@ -26,6 +26,7 @@ final class PocketStore {
     var activePrompt = ""
     var preview: Data?
     @ObservationIgnored private var nodeSamplingRun = NodeSamplingRun()
+    @ObservationIgnored private var canvasDisplayRun = CanvasDisplayRun()
     var pluginAvailable = false
     var syncStatus = "等待连接"
     var syncing = false
@@ -310,6 +311,7 @@ final class PocketStore {
         queue = .object([:]); history = .object([:]); nodeInfo = .object([:])
         preview = nil; progress = 0; activeNode = ""; activePrompt = ""
         nodeSamplingRun = NodeSamplingRun()
+        canvasDisplayRun = CanvasDisplayRun()
         pluginAvailable = false; syncing = false; syncStatus = "等待连接"
         pluginCapabilities = []
     }
@@ -465,12 +467,22 @@ final class PocketStore {
         case "execution_success":
             nodeSamplingRun.end(d["prompt_id"].text)
             Task { await refresh() }
-        case "executed", "status": Task { await refresh() }
+        case "executed":
+            if canvasDisplayRun.receive(d) { replayCanvasDisplayText() }
+            Task { await refresh() }
+        case "status": Task { await refresh() }
         default: break
         }
     }
     func replaySamplingPreviews() {
         deliverSamplingPreviews(nodeSamplingRun.buffer.frames)
+    }
+    func replayCanvasDisplayText() {
+        guard !suspended, let workflowID = canvasEditingID,
+              let session = canvasEditingSession, session.loaded else { return }
+        let texts = currentMediaArchive.canvasDisplayText(workflowID: workflowID, tasks: currentGenerationTasks,
+                                                          live: canvasDisplayRun)
+        session.offerDisplayText(texts)
     }
     private func deliverSamplingPreviews(_ frames: [NodeSamplingFrame]) {
         guard !frames.isEmpty, !suspended, let promptID = nodeSamplingRun.promptID,
@@ -491,6 +503,7 @@ final class PocketStore {
             try mergeMedia(h, server: api.serverID)
             queue = q; history = currentMediaArchive.visibleHistory(h)
             restoreGenerationTasks(server: api.serverID)
+            replayCanvasDisplayText()
             updateGenerationActivities()
         } catch {
             guard canMonitorServer, !restoringConnection, !Task.isCancelled, client === api else { return }
@@ -551,6 +564,7 @@ final class PocketStore {
                     generationTasks[taskIndex].items.append(GenerationItem(id: promptID, prompt: submitted.prompt, sequence: index))
                 }
                 if nodeSamplingRun.promptID == promptID { replaySamplingPreviews() }
+                if canvasDisplayRun.promptID == promptID { replayCanvasDisplayText() }
                 saveGenerationTasks()
                 queued += 1
                 updateGenerationActivities()

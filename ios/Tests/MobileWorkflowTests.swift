@@ -5,6 +5,33 @@ import XCTest
 @testable import ComfyUIPocket
 #endif
 
+final class CanvasDisplayTextTests: XCTestCase {
+    func testDisplayRestoresHistoryAndKeepsNewerLiveTextInItsOwnWorkflow() throws {
+        let node: JSONValue = .object(["class_type": .string("GoohaiDisplayAny")])
+        let prompt = ["52": node, "2:9": node]
+        let older = GenerationItem(id: "old", prompt: prompt)
+        let newer = GenerationItem(id: "new", prompt: prompt)
+        let task = GenerationTask(id: "task", server: "server", workflowID: "moss", name: "MOSS",
+                                  createdAt: 1, requestedCount: 2, items: [older, newer])
+        var archive = MediaArchive()
+        archive.provenance = ["old": MediaProvenance(prompt: prompt, workflowID: "moss", workflowName: "MOSS",
+            taskID: task.id, createdAt: 1, displayedText: ["52": "old", "2:9": "nested"])]
+        var live = CanvasDisplayRun()
+        XCTAssertEqual(archive.canvasDisplayText(workflowID: "moss", tasks: [task], live: live),
+                       ["52": "old", "2:9": "nested"])
+        let result: JSONValue = .object(["gh_display": .array([
+            .object(["type": .string("STRING"), "text": .string("new")]),
+            .object(["type": .string("TEXT"), "text": .string("second line")])
+        ])])
+        XCTAssertTrue(live.receive(.object(["node": .string("52"), "prompt_id": .string("new"), "output": result])))
+        XCTAssertEqual(archive.canvasDisplayText(workflowID: "moss", tasks: [task], live: live),
+                       ["52": "new\n\nsecond line", "2:9": "nested"])
+        XCTAssertTrue(archive.canvasDisplayText(workflowID: "other", tasks: [task], live: live).isEmpty)
+        archive.deletedPromptIDs.insert("new")
+        XCTAssertEqual(archive.canvasDisplayText(workflowID: "moss", tasks: [task], live: live)["52"], "old")
+    }
+}
+
 final class MobileWorkflowTests: XCTestCase {
     func testArtworkDetailsKeepSubmittedPromptAfterHistoryAndTaskRemoval() throws {
         let history = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"p":{"prompt":[1,"p",{"1":{"class_type":"SaveImage","inputs":{"images":["2",0]}},"2":{"class_type":"LazyMergeGenerate","inputs":{"工作台包":["3",0],"resolution":["4",0]}},"3":{"class_type":"LazyMergeWorkbench","inputs":{"提示词文本":"original prompt"}},"4":{"class_type":"Size","inputs":{"width":1024,"height":768,"seed":18446744073709551615}}},{"pocket_task":{"id":"batch","name":"K2 Workbench","workflow_id":"workflow-a","created_at":1700000000}}],"outputs":{"1":{"images":[{"filename":"a.png","type":"output"}]}}}}"#.utf8))

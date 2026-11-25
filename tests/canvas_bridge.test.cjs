@@ -5,6 +5,27 @@ const { setNodeAppearance } = require('../ios/Pocket/CanvasBridge.js');
 const { workspaceRestored, loadWorkflowGraph } = require('../ios/Pocket/CanvasBridge.js');
 const { assetInputWidget, dropReferenceAsset } = require('../ios/Pocket/CanvasBridge.js');
 const { showSamplingPreview } = require('../ios/Pocket/CanvasBridge.js');
+const { showGoohaiDisplayText } = require('../ios/Pocket/CanvasBridge.js');
+
+test('Goohai output redraws the matched widget without changing saved graph properties', () => {
+  const preview = { type: 'STRING', text: 'old saved preview' };
+  const node = {
+    id: 52, type: 'GoohaiDisplayAny', properties: { gh_display_preview: preview, theme: 'custom' },
+    onExecuted(output) {
+      this.properties.gh_display_preview = output.gh_display[0];
+      this.rendered = this.properties.gh_display_preview.text;
+    }
+  };
+  const wrong = { id: 53, type: 'Text', onExecuted: () => assert.fail('unexpected node') };
+  const graph = { _nodes: [{ id: 3, subgraph: { _nodes: [node, wrong] } }] };
+  assert.deepEqual(showGoohaiDisplayText(graph, { '3:52': '新反推\n第二行', '3:53': 'wrong', '52': 'missing' }), ['3:52']);
+  assert.equal(node.rendered, '新反推\n第二行');
+  assert.deepEqual(node.properties, { gh_display_preview: preview, theme: 'custom' });
+  delete node.properties.gh_display_preview;
+  assert.deepEqual(showGoohaiDisplayText(graph, { '3:52': '' }), ['3:52']);
+  assert.equal(node.rendered, '');
+  assert.deepEqual(node.properties, { theme: 'custom' });
+});
 
 test('canvas bootstrap shares node definitions and preserves ordinary authenticated fetches', async () => {
   const vm = require('node:vm'), fs = require('node:fs');

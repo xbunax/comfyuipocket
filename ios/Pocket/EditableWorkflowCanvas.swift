@@ -100,6 +100,7 @@ struct WorkflowCanvasView: View {
                         store.canvasSessions.attach(session)
                         session.open(workflow: workflow, api: api)
                         store.replaySamplingPreviews()
+                        store.replayCanvasDisplayText()
                         await session.applyAppearance()
                         while !Task.isCancelled {
                             try? await Task.sleep(for: .seconds(3))
@@ -204,7 +205,10 @@ struct WorkflowCanvasView: View {
             .onChange(of: PocketAppearance.shared.colorway) { _, _ in Task { await session.applyAppearance() } }
             .onChange(of: session.available) { _, available in if available { Task { await session.applyAppearance() } } }
             .onChange(of: session.loaded) { _, loaded in
-                if loaded, store.canvasEditingSession === session { store.replaySamplingPreviews() }
+                if loaded, store.canvasEditingSession === session {
+                    store.replaySamplingPreviews()
+                    store.replayCanvasDisplayText()
+                }
             }
             .onDisappear {
                 if store.canvasEditingSession === session { store.canvasEditingID = nil; store.canvasEditingSession = nil }
@@ -638,6 +642,34 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     @ObservationIgnored private var samplingOffered: [String: UUID] = [:]
     @ObservationIgnored private var samplingPending = NodeSamplingBuffer()
     @ObservationIgnored private var samplingDelivery: Task<Void, Never>?
+    @ObservationIgnored private var displayedText: [String: String] = [:]
+    @ObservationIgnored private var pendingDisplayText: [String: String]?
+    @ObservationIgnored private var displayTextDelivery: Task<Void, Never>?
+
+    func offerDisplayText(_ texts: [String: String]) {
+        guard loaded else { return }
+        pendingDisplayText = texts
+        guard displayTextDelivery == nil else { return }
+        displayTextDelivery = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, self.loaded, let pending = self.pendingDisplayText {
+                self.pendingDisplayText = nil
+                let updates = pending.filter { self.displayedText[$0.key] != $0.value }
+                guard !updates.isEmpty else { continue }
+                let rendered = (try? await self.call("displayText", arguments: ["texts": updates])) as? [String] ?? []
+                guard !Task.isCancelled else { return }
+                for nodeID in rendered { self.displayedText[nodeID] = updates[nodeID] }
+            }
+            self.displayTextDelivery = nil
+        }
+    }
+
+    private func clearDisplayText() {
+        displayTextDelivery?.cancel()
+        displayTextDelivery = nil
+        pendingDisplayText = nil
+        displayedText.removeAll()
+    }
 
     func offerSamplingPreviews(_ frames: [NodeSamplingFrame], promptID: String) {
         guard loaded, !frames.isEmpty else { return }
@@ -716,6 +748,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
             available: available, current: revision, incoming: incoming, force: force)
         if plan == .reuse { reused = true; return }
         clearSamplingPreviews()
+        clearDisplayText()
         self.baseURL = baseURL; loading = true; loaded = false; available = false; textEditing = false; scene = MobileCanvasScene(); focusedNodeID = ""; nodeFocusActive = false; mismatch = nil; mismatchFields = []; error = nil; lastSaved = ""
         reused = false; pendingRevision = incoming
         do { initialText = String(decoding: try JSONEncoder().encode(workflow), as: UTF8.self) }
@@ -737,6 +770,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
     }
     func discard() {
         clearSamplingPreviews()
+        clearDisplayText()
         webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketCanvas")
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "pocketNodeDefinitions", contentWorld: .page)
@@ -748,6 +782,7 @@ final class CanvasSession: NSObject, WKNavigationDelegate, WKUIDelegate, WKScrip
         let scripts: [String: String] = [
             "scene": "return window.PocketCanvas.scene();",
             "samplingPreview": "return window.PocketCanvas.samplingPreview(payload);",
+            "displayText": "return window.PocketCanvas.displayText(texts);",
             "prepareAsset": "return window.PocketCanvas.prepareAsset(x, y, asset, token);",
             "importAsset": "return await window.PocketCanvas.importAsset(token, value);",
             "overviewPreference": "return window.PocketCanvas.overviewPreference(enabled);",

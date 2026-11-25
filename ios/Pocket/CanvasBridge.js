@@ -24,6 +24,29 @@
     return true;
   }
 
+  function showGoohaiDisplayText(graph, texts) {
+    const rendered = [];
+    for (const [id, text] of Object.entries(texts)) {
+      const node = executionNode(graph, id);
+      if (node?.type !== "GoohaiDisplayAny" || typeof node.onExecuted !== "function" || typeof text !== "string") continue;
+      const properties = node.properties;
+      const hadPreview = properties && Object.hasOwn(properties, "gh_display_preview");
+      const previous = properties?.gh_display_preview;
+      try {
+        node.onExecuted({ gh_display: [{ type: "STRING", text }] });
+        rendered.push(id);
+      } finally {
+        // Goohai stores its last preview in node properties as well as the DOM.
+        // Runtime output must not dirty the canvas or sync back as a graph edit.
+        if (node.properties) {
+          if (hadPreview) node.properties.gh_display_preview = previous;
+          else delete node.properties.gh_display_preview;
+        }
+      }
+    }
+    return rendered;
+  }
+
   function workspaceRestored(app) {
     // setup() finishes before GraphCanvas restores persisted workflow tabs.
     // These public stores cover both current and older frontend versions.
@@ -473,7 +496,7 @@
 
   // The same graph operations are exercised by Node tests and the actual editor.
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { installOverviewTap, executionNode, showSamplingPreview, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, dropReferenceAsset, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
+    module.exports = { installOverviewTap, executionNode, showSamplingPreview, showGoohaiDisplayText, applyPrompt, executablePrompt, equivalentInput, change, ports, connect, disconnect, mobileScene, setMobileWidget, assetInputWidget, dropReferenceAsset, moveMobileNode, focusNode, focusBookmark, bookmarkLocations, restoreExecutionModes, textInputCamera, setNodeAppearance, workspaceRestored, graphMatchesWorkflow, loadWorkflowGraph };
     return;
   }
 
@@ -730,6 +753,10 @@
     delete: "Comfy.Canvas.DeleteSelectedItems"
   };
   window.PocketCanvas = {
+    displayText(texts) {
+      if (!loaded || app.rootGraph.id !== ownedGraphID) return [];
+      return showGoohaiDisplayText(app.rootGraph, texts);
+    },
     samplingPreview(payload) {
       if (!loaded || app.rootGraph.id !== ownedGraphID) return false;
       return showSamplingPreview(app.rootGraph, JSON.parse(payload));

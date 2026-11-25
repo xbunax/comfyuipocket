@@ -131,6 +131,54 @@ struct MediaArchive: Codable, Equatable {
     func visibleHistory(_ history: JSONValue) -> JSONValue {
         .object(history.object.filter { !deletedPromptIDs.contains($0.key) })
     }
+
+    func canvasDisplayText(workflowID: String, tasks: [GenerationTask], live: CanvasDisplayRun) -> [String: String] {
+        var displays: [String: String] = [:]
+        for task in tasks where task.workflowID == workflowID && !deletedTaskIDs.contains(task.id) {
+            for item in task.items.reversed() where !deletedPromptIDs.contains(item.id) {
+                var texts = provenance?[item.id]?.displayedText ?? [:]
+                if item.id == live.promptID { texts.merge(live.texts) { _, latest in latest } }
+                for (nodeID, text) in texts where displays[nodeID] == nil
+                    && item.prompt[nodeID]?["class_type"] == .string("GoohaiDisplayAny") {
+                    displays[nodeID] = text
+                }
+            }
+        }
+        return displays
+    }
+}
+
+struct CanvasDisplayRun {
+    private(set) var promptID: String?
+    private(set) var texts: [String: String] = [:]
+
+    static func text(from output: JSONValue) -> String? {
+        let payloads = output["gh_display"].array
+        guard !payloads.isEmpty else { return nil }
+        var texts: [String] = []
+        var size = 0
+        for payload in payloads {
+            guard ["STRING", "TEXT"].contains(payload["type"].text.uppercased()),
+                  case .string(let text) = payload["text"] else { return nil }
+            size += text.utf8.count + 2
+            guard size <= 256 * 1024 else { return nil }
+            texts.append(text)
+        }
+        return texts.joined(separator: "\n\n")
+    }
+
+    mutating func receive(_ event: JSONValue) -> Bool {
+        guard let promptID = event["prompt_id"].text.nonEmpty,
+              let nodeID = event["node"].text.nonEmpty,
+              let text = Self.text(from: event["output"]) else { return false }
+        if self.promptID != promptID {
+            self.promptID = promptID
+            texts.removeAll()
+        }
+        guard texts[nodeID] != text, texts[nodeID] != nil || texts.count < 64 else { return false }
+        texts[nodeID] = text
+        return true
+    }
 }
 
 struct MediaProvenance: Codable, Equatable {
@@ -160,9 +208,7 @@ struct MediaProvenance: Codable, Equatable {
                 producers[file.assetID, default: []].append(nodeID)
             }
             if record.prompt[nodeID]?["class_type"].text == "GoohaiDisplayAny",
-               let payload = result["gh_display"].array.first,
-               ["STRING", "TEXT"].contains(payload["type"].text.uppercased()),
-               case .string(let text) = payload["text"] {
+               let text = CanvasDisplayRun.text(from: result) {
                 displayed[nodeID] = text
             }
         }
